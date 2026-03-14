@@ -21,6 +21,13 @@ const EVENT_STREAM_RETRY_MAX_MS = 10000;
 const TELEGRAM_MESSAGE_MAX_LENGTH = 3900;
 const TELEGRAM_SYNC_MESSAGE_LIMIT = 80;
 const TELEGRAM_CLEAR_BATCH_SIZE = 50;
+const TELEGRAM_LIVE_SYNC_INTERVAL_MS = Number(process.env.OPENCODE_TELEGRAM_LIVE_SYNC_INTERVAL_MS) || 5000;
+const TELEGRAM_LIVE_SYNC_MAX_TRACKED_KEYS = 2000;
+const TELEGRAM_SYNC_FINAL_ONLY = process.env.OPENCODE_TELEGRAM_SYNC_FINAL_ONLY !== "false";
+const TELEGRAM_SYNC_INCLUDE_THINKING = process.env.OPENCODE_TELEGRAM_SYNC_INCLUDE_THINKING === "true";
+const TELEGRAM_SYNC_INCLUDE_CODE_CHANGES = process.env.OPENCODE_TELEGRAM_SYNC_INCLUDE_CODE_CHANGES === "true";
+const TELEGRAM_SYNC_MIRROR_USER_MESSAGES = process.env.OPENCODE_TELEGRAM_SYNC_MIRROR_USER_MESSAGES !== "false";
+const TELEGRAM_SYNC_USER_PREFIX = process.env.OPENCODE_TELEGRAM_SYNC_USER_PREFIX || "❓";
 
 const PROJECT_ROOTS = [
     { scope: "petar", path: "/Users/petartopic/Desktop/Petar", label: "Petar" },
@@ -57,6 +64,9 @@ const commandAliasByProjectPath = new Map();
 const commandCacheByProjectPath = new Map();
 const telegramCommandMap = new Map();
 const trackedMessageIdsByChat = new Map();
+const seenSessionMessageKeysByChatProject = new Map();
+
+let liveSyncInFlight = false;
 
 function trackMessageId(chatId, messageId) {
     if (typeof messageId !== "number") return;
@@ -70,6 +80,36 @@ async function sendTrackedMessage(chatId, text, options) {
     const sent = await bot.sendMessage(chatId, text, options);
     trackMessageId(chatId, sent?.message_id);
     return sent;
+}
+
+function isIgnorableTelegramCallbackError(err) {
+    const description = err?.response?.body?.description ?? err?.message ?? "";
+    if (typeof description !== "string") return false;
+    const normalized = description.toLowerCase();
+    return (
+        normalized.includes("query is too old") ||
+        normalized.includes("query id is invalid")
+    );
+}
+
+async function answerCallbackQuerySafely(queryId, options) {
+    if (!queryId) return;
+    try {
+        await bot.answerCallbackQuery(queryId, options);
+    } catch (err) {
+        if (isIgnorableTelegramCallbackError(err)) {
+            console.warn("Ignoring stale Telegram callback query", {
+                queryId,
+                description: err?.response?.body?.description ?? err?.message,
+            });
+            return;
+        }
+
+        console.error("Failed answering callback query", {
+            queryId,
+            description: err?.response?.body?.description ?? err?.message,
+        });
+    }
 }
 
 async function clearTrackedMessages(chatId) {
@@ -106,8 +146,31 @@ function getTextFromParts(parts) {
     if (!Array.isArray(parts)) return "";
 
     return parts
-        .filter((part) => part && part.type === "text" && typeof part.text === "string")
-        .map((part) => part.text)
+        .map((part) => {
+            if (!part || typeof part !== "object") return "";
+
+            const type = typeof part.type === "string" ? part.type.toLowerCase() : "";
+            if (type === "reasoning" && !TELEGRAM_SYNC_INCLUDE_THINKING) return "";
+            if (type && !["text", "reasoning"].includes(type)) return "";
+
+            if (typeof part.text === "string") return part.text;
+            if (typeof part.value === "string") return part.value;
+            if (typeof part.content === "string") return part.content;
+
+            if (Array.isArray(part.content)) {
+                return part.content
+                    .map((item) => {
+                        if (!item || typeof item !== "object") return "";
+                        if (typeof item.text === "string") return item.text;
+                        if (typeof item.content === "string") return item.content;
+                        return "";
+                    })
+                    .filter(Boolean)
+                    .join("\n");
+            }
+
+            return "";
+        })
         .join("\n")
         .trim();
 }
@@ -116,14 +179,33 @@ function extractReply(data) {
     if (typeof data === "string") return data.trim();
     if (!data || typeof data !== "object") return "";
 
-    const directCandidates = [data.response, data.message, data.reply, data.outputText];
+    const directCandidates = [
+        data.response,
+        data.message,
+        data.reply,
+        data.outputText,
+        data.text,
+        data.content,
+        data.result?.text,
+        data.result?.content,
+        data.message?.content,
+        data.message?.text,
+    ];
     for (const value of directCandidates) {
         if (typeof value === "string" && value.trim() !== "") {
             return value.trim();
         }
     }
 
-    const partCandidates = [data.parts, data.result?.parts, data.message?.parts];
+    const partCandidates = [
+        data.parts,
+        data.result?.parts,
+        data.message?.parts,
+        data.content,
+        data.result?.content,
+        data.message?.content,
+        data.output,
+    ];
     for (const parts of partCandidates) {
         const text = getTextFromParts(parts);
         if (text) return text;
@@ -214,6 +296,19 @@ function truncateText(value, maxLength) {
 
 function getChatProjectKey(chatId, projectPath) {
     return `${chatId}::${projectPath}`;
+}
+
+function parseChatProjectKey(value) {
+    if (typeof value !== "string") return null;
+    const splitAt = value.indexOf("::");
+    if (splitAt <= 0 || splitAt >= value.length - 2) return null;
+
+    const chatIdRaw = value.slice(0, splitAt);
+    const projectPath = value.slice(splitAt + 2);
+    const chatId = Number(chatIdRaw);
+    if (!Number.isFinite(chatId)) return null;
+
+    return { chatId, projectPath };
 }
 
 function normalizePath(value) {
@@ -382,6 +477,91 @@ function getSessionCreatedTimestamp(session) {
     return 0;
 }
 
+function getSessionUpdatedTimestamp(session) {
+    const updatedCandidates = [
+        session?.time?.updated,
+        session?.time?.updatedAt,
+        session?.updatedAt,
+        session?.updated_at,
+        session?.updated,
+        session?.lastUpdated,
+        session?.last_message_at,
+        session?.lastMessageAt,
+        session?.lastActivityAt,
+        session?.last_activity_at,
+        session?.meta?.updatedAt,
+        session?.metadata?.updatedAt,
+        ...collectTimestampCandidates(session, /updated|modified|last|activity/i),
+    ];
+
+    for (const candidate of updatedCandidates) {
+        const parsed = parseTimestamp(candidate);
+        if (parsed > 0) return parsed;
+    }
+
+    return 0;
+}
+
+function getSessionActivityTimestamp(session) {
+    const updated = getSessionUpdatedTimestamp(session);
+    if (updated > 0) return updated;
+
+    return getSessionCreatedTimestamp(session);
+}
+
+function getSessionStateText(session) {
+    const candidates = [
+        session?.state,
+        session?.status,
+        session?.lifecycle?.state,
+        session?.meta?.state,
+        session?.metadata?.state,
+        session?.session?.state,
+    ];
+
+    for (const candidate of candidates) {
+        if (typeof candidate !== "string") continue;
+        const state = candidate.trim().toLowerCase();
+        if (state) return state;
+    }
+
+    return "";
+}
+
+function pickOpenCodeCurrentSessionId(sessions) {
+    if (!Array.isArray(sessions) || sessions.length === 0) return null;
+
+    for (const session of sessions) {
+        const id = typeof session?.id === "string" ? session.id : "";
+        if (!id) continue;
+
+        const flagCandidates = [
+            session?.current,
+            session?.isCurrent,
+            session?.active,
+            session?.isActive,
+            session?.selected,
+            session?.isSelected,
+            session?.meta?.current,
+            session?.meta?.active,
+            session?.metadata?.current,
+            session?.metadata?.active,
+            session?.session?.current,
+        ];
+
+        if (flagCandidates.some((value) => value === true)) {
+            return id;
+        }
+
+        const state = getSessionStateText(session);
+        if (["current", "active", "selected", "running"].includes(state)) {
+            return id;
+        }
+    }
+
+    return null;
+}
+
 function buildSessionDirectory(sessions) {
     const items = [];
     const slugToSessionId = new Map();
@@ -498,13 +678,14 @@ function getEventSessionId(event) {
         event?.sessionID,
         event?.sessionId,
         event?.session?.id,
+        event?.info?.sessionID,
+        event?.info?.sessionId,
+        event?.info?.session?.id,
         event?.properties?.sessionID,
         event?.properties?.sessionId,
         event?.properties?.session?.id,
         event?.properties?.info?.sessionID,
         event?.properties?.info?.sessionId,
-        event?.info?.sessionID,
-        event?.info?.sessionId,
     ];
 
     for (const candidate of candidates) {
@@ -545,25 +726,62 @@ function parseSseJsonEvents(chunkBuffer) {
 }
 
 function isAssistantLikeMessage(message) {
-    const roleCandidates = [
-        message?.role,
-        message?.type,
-        message?.author?.role,
-        message?.info?.role,
-        message?.properties?.role,
-        message?.metadata?.role,
-    ];
-
-    return roleCandidates.some((candidate) => typeof candidate === "string" && candidate.toLowerCase() === "assistant");
+    return getMessageRole(message) === "assistant";
 }
 
 function getSessionMessages(data) {
+    const isMessageLike = (candidate) => {
+        if (!candidate || typeof candidate !== "object") return false;
+        if (typeof candidate.role === "string") return true;
+        if (typeof candidate.type === "string") return true;
+        if (Array.isArray(candidate.parts)) return true;
+        if (typeof candidate.content === "string") return true;
+        if (Array.isArray(candidate.content)) return true;
+        if (typeof candidate.message === "string") return true;
+        if (typeof candidate.response === "string") return true;
+        if (typeof candidate.text === "string") return true;
+        return false;
+    };
+
+    const collectMessageArrays = (value, depth = 0) => {
+        if (depth > 4 || !value || typeof value !== "object") return [];
+        const arrays = [];
+
+        if (Array.isArray(value)) {
+            if (value.length > 0 && value.some((item) => isMessageLike(item))) {
+                arrays.push(value);
+            }
+
+            for (const item of value) {
+                arrays.push(...collectMessageArrays(item, depth + 1));
+            }
+            return arrays;
+        }
+
+        for (const nested of Object.values(value)) {
+            arrays.push(...collectMessageArrays(nested, depth + 1));
+        }
+
+        return arrays;
+    };
+
+    const objectCollections = [
+        data?.messages,
+        data?.session?.messages,
+        data?.result?.messages,
+        data?.data?.messages,
+    ]
+        .filter((candidate) => candidate && typeof candidate === "object" && !Array.isArray(candidate))
+        .map((candidate) => Object.values(candidate).filter((item) => item && typeof item === "object"));
+
     const directArrays = [
         data?.messages,
         data?.session?.messages,
         data?.result?.messages,
         data?.data?.messages,
         ...collectTimestampCandidates(data, /messages?/i),
+        ...collectMessageArrays(data),
+        ...objectCollections,
     ];
 
     return directArrays.filter((candidate) => Array.isArray(candidate));
@@ -600,6 +818,8 @@ function getMessageRole(message) {
     const candidates = [
         message?.role,
         message?.type,
+        message?.info?.role,
+        message?.info?.type,
         message?.author?.role,
         message?.info?.role,
         message?.metadata?.role,
@@ -616,6 +836,195 @@ function getMessageRole(message) {
     }
 
     return null;
+}
+
+function formatSessionMessageForTelegram(message) {
+    const text = extractReply(message);
+    const patchSummary = TELEGRAM_SYNC_INCLUDE_CODE_CHANGES ? buildPatchSummaryForMessage(message) : "";
+
+    if (!text && !patchSummary) return null;
+
+    const role = getMessageRole(message);
+    const prefix = role === "assistant" ? "OpenCode" : role === "system" ? "System" : "Message";
+
+    if (role === "user") {
+        if (text && patchSummary) {
+            return `${TELEGRAM_SYNC_USER_PREFIX} ${text}\n\n${patchSummary}`;
+        }
+        if (text) {
+            return `${TELEGRAM_SYNC_USER_PREFIX} ${text}`;
+        }
+        return patchSummary;
+    }
+
+    if (text && patchSummary) {
+        return `${prefix}:\n${text}\n\n${patchSummary}`;
+    }
+
+    if (text) {
+        return `${prefix}:\n${text}`;
+    }
+
+    return `${prefix}:\n${patchSummary}`;
+}
+
+function shouldSyncMessageToTelegram(message) {
+    const role = getMessageRole(message);
+    const hasText = extractReply(message) !== "";
+    const hasPatchSummary = TELEGRAM_SYNC_INCLUDE_CODE_CHANGES && buildPatchSummaryForMessage(message) !== "";
+    if (!hasText && !hasPatchSummary) return false;
+
+    if (!TELEGRAM_SYNC_FINAL_ONLY) {
+        if (role === "user" && !TELEGRAM_SYNC_MIRROR_USER_MESSAGES) return false;
+        return true;
+    }
+
+    if (role === "assistant") return true;
+    if (role === "user") return TELEGRAM_SYNC_MIRROR_USER_MESSAGES;
+    return false;
+}
+
+function getMessageParts(message) {
+    if (!message || typeof message !== "object") return [];
+    if (Array.isArray(message.parts)) return message.parts;
+    if (Array.isArray(message?.message?.parts)) return message.message.parts;
+    if (Array.isArray(message?.result?.parts)) return message.result.parts;
+    return [];
+}
+
+function buildPatchSummaryForMessage(message) {
+    const parts = getMessageParts(message);
+    if (parts.length === 0) return "";
+
+    const changedFiles = [];
+    for (const part of parts) {
+        if (!part || typeof part !== "object") continue;
+        if (part.type !== "patch" || !Array.isArray(part.files)) continue;
+        for (const file of part.files) {
+            if (typeof file === "string" && file.trim() !== "") {
+                changedFiles.push(file.trim());
+            }
+        }
+    }
+
+    if (changedFiles.length === 0) return "";
+
+    const unique = [...new Set(changedFiles)].slice(0, 40);
+    return [
+        "```text",
+        "Code changes:",
+        ...unique.map((file) => `- ${file}`),
+        "```",
+    ].join("\n");
+}
+
+function getSessionMessageKey(message, fallbackIndex = 0) {
+    if (!message || typeof message !== "object") {
+        return `fallback:${fallbackIndex}`;
+    }
+
+    const idCandidates = [
+        message?.id,
+        message?.messageId,
+        message?.info?.id,
+        message?.info?.messageID,
+        message?.uuid,
+        message?.ulid,
+        message?.eventId,
+        message?.metadata?.id,
+        message?.properties?.id,
+    ];
+
+    for (const candidate of idCandidates) {
+        if (typeof candidate === "string" && candidate.trim() !== "") {
+            return `id:${candidate.trim()}`;
+        }
+        if (typeof candidate === "number" && Number.isFinite(candidate)) {
+            return `id:${candidate}`;
+        }
+    }
+
+    const role = getMessageRole(message) ?? "unknown";
+    const text = extractReply(message).replace(/\s+/g, " ").trim();
+    const preview = text ? text.slice(0, 400) : "";
+    const length = text.length;
+    const timestamp = parseTimestamp(
+        message?.createdAt ??
+            message?.created_at ??
+            message?.timestamp ??
+            message?.info?.time?.created ??
+            message?.info?.time?.createdAt ??
+            message?.info?.createdAt ??
+            message?.info?.created_at ??
+            message?.time?.createdAt ??
+            message?.time?.created,
+    );
+
+    if (preview) {
+        return `content:${role}:${timestamp}:${length}:${preview}`;
+    }
+
+    return `fallback:${fallbackIndex}`;
+}
+
+function rememberSessionMessageKeys(chatProjectKey, messages) {
+    if (!chatProjectKey || !Array.isArray(messages) || messages.length === 0) return;
+
+    const existing = seenSessionMessageKeysByChatProject.get(chatProjectKey) ?? [];
+    const seen = new Set(existing);
+
+    for (let i = 0; i < messages.length; i += 1) {
+        const key = getSessionMessageKey(messages[i], i);
+        if (!seen.has(key)) {
+            existing.push(key);
+            seen.add(key);
+        }
+    }
+
+    if (existing.length > TELEGRAM_LIVE_SYNC_MAX_TRACKED_KEYS) {
+        existing.splice(0, existing.length - TELEGRAM_LIVE_SYNC_MAX_TRACKED_KEYS);
+    }
+
+    seenSessionMessageKeysByChatProject.set(chatProjectKey, existing);
+}
+
+function isKnownSessionMessage(chatProjectKey, message, fallbackIndex = 0) {
+    const keys = seenSessionMessageKeysByChatProject.get(chatProjectKey);
+    if (!keys || keys.length === 0) return false;
+
+    const known = new Set(keys);
+    return known.has(getSessionMessageKey(message, fallbackIndex));
+}
+
+async function snapshotSessionMessagesAsSeen(chatId, workspace, sessionId) {
+    const rawMessages = await fetchSessionMessages(workspace, sessionId);
+    rememberSessionMessageKeys(getChatProjectKey(chatId, workspace.projectPath), rawMessages);
+}
+
+async function fetchSessionMessages(workspace, sessionId) {
+    try {
+        const messageRes = await axios.get(`${workspace.baseUrl}/session/${sessionId}/message`, {
+            timeout: 15000,
+            params: { limit: 500 },
+        });
+
+        const payload = messageRes?.data;
+        const asArray = Array.isArray(payload)
+            ? payload
+            : Array.isArray(payload?.messages)
+              ? payload.messages
+              : [];
+
+        if (asArray.length > 0) {
+            return asArray;
+        }
+    } catch {}
+
+    const sessionRes = await axios.get(`${workspace.baseUrl}/session/${sessionId}`, {
+        timeout: 15000,
+    });
+
+    return getSyncableSessionMessages(sessionRes?.data);
 }
 
 function splitForTelegram(text, maxLength = TELEGRAM_MESSAGE_MAX_LENGTH) {
@@ -661,27 +1070,20 @@ function getSyncableSessionMessages(data) {
 
 async function syncTelegramChatFromSession(chatId, workspace, sessionId, options = {}) {
     const clearChat = options.clearChat !== false;
+    const chatProjectKey = getChatProjectKey(chatId, workspace.projectPath);
+    sessionByChatProject.set(chatProjectKey, sessionId);
 
-    const sessionRes = await axios.get(`${workspace.baseUrl}/session/${sessionId}`, {
-        timeout: 15000,
-    });
-
-    const rawMessages = getSyncableSessionMessages(sessionRes?.data);
+    const rawMessages = await fetchSessionMessages(workspace, sessionId);
+    rememberSessionMessageKeys(chatProjectKey, rawMessages);
     const syncMessages = rawMessages
-        .map((message) => {
-            const text = extractReply(message);
-            if (!text) return null;
-
-            const role = getMessageRole(message);
-            const prefix = role === "user" ? "You" : role === "assistant" ? "OpenCode" : role === "system" ? "System" : "Message";
-            return `${prefix}:\n${text}`;
-        })
+        .filter((message) => shouldSyncMessageToTelegram(message))
+        .map((message) => formatSessionMessageForTelegram(message))
         .filter(Boolean);
 
     const truncated = syncMessages.length > TELEGRAM_SYNC_MESSAGE_LIMIT;
     const finalMessages = truncated ? syncMessages.slice(syncMessages.length - TELEGRAM_SYNC_MESSAGE_LIMIT) : syncMessages;
 
-    const directory = await loadSessionDirectory(chatId, workspace);
+    const { directory } = await loadSessionDirectory(chatId, workspace);
     const sessionLine = describeSession(directory, sessionId);
 
     if (clearChat) {
@@ -691,7 +1093,10 @@ async function syncTelegramChatFromSession(chatId, workspace, sessionId, options
     await sendTrackedMessage(chatId, `Synced from OpenCode\nProject: ${workspace.projectLabel}/${workspace.projectName}\n${sessionLine}`);
 
     if (finalMessages.length === 0) {
-        await sendTrackedMessage(chatId, "Session has no text messages yet.");
+        await sendTrackedMessage(
+            chatId,
+            TELEGRAM_SYNC_FINAL_ONLY ? "Session has no assistant responses yet." : "Session has no text messages yet.",
+        );
         return;
     }
 
@@ -718,10 +1123,17 @@ async function waitForSessionIdle(workspace, sessionId, timeoutMs = EVENT_STREAM
         const timeout = setTimeout(() => controller.abort(), remainingMs);
 
         try {
-            const response = await fetch(`${workspace.baseUrl}/global/event`, {
+            let response = await fetch(`${workspace.baseUrl}/event`, {
                 headers: { Accept: "text/event-stream" },
                 signal: controller.signal,
             });
+
+            if (!response.ok || !response.body) {
+                response = await fetch(`${workspace.baseUrl}/global/event`, {
+                    headers: { Accept: "text/event-stream" },
+                    signal: controller.signal,
+                });
+            }
 
             if (!response.ok || !response.body) {
                 throw new Error(`Event stream unavailable (${response.status})`);
@@ -776,10 +1188,19 @@ async function waitForSessionIdle(workspace, sessionId, timeoutMs = EVENT_STREAM
 }
 
 async function fetchLatestSessionReply(workspace, sessionId) {
-    const res = await axios.get(`${workspace.baseUrl}/session/${sessionId}`, {
-        timeout: 10000,
-    });
-    return extractLatestAssistantReplyFromSession(res?.data);
+    const messages = await fetchSessionMessages(workspace, sessionId);
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const text = extractReply(messages[i]);
+        if (!text) continue;
+        if (isAssistantLikeMessage(messages[i])) return text;
+    }
+
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const text = extractReply(messages[i]);
+        if (text) return text;
+    }
+
+    return "";
 }
 
 async function recoverReplyFromEventStream(workspace, sessionId, sourceError) {
@@ -1121,35 +1542,68 @@ async function loadSessionDirectory(chatId, workspace) {
     }
 
     const projectSessions = sessions.filter((session) => sessionBelongsToProject(session, workspace.projectPath));
+    const selectedSessions = projectSessions.length > 0 ? projectSessions : sessions;
 
-    const sortedSessions = [...projectSessions].sort((a, b) => {
-        const aCreated = getSessionCreatedTimestamp(a);
-        const bCreated = getSessionCreatedTimestamp(b);
-        return bCreated - aCreated;
+    const sortedSessions = [...selectedSessions].sort((a, b) => {
+        const aActivity = getSessionActivityTimestamp(a);
+        const bActivity = getSessionActivityTimestamp(b);
+        return bActivity - aActivity;
     });
 
     const directory = buildSessionDirectory(sortedSessions);
     sessionDirectoryByChatProject.set(getChatProjectKey(chatId, workspace.projectPath), directory);
-    return directory;
+    return {
+        directory,
+        sessions: sortedSessions,
+        currentSessionId: pickOpenCodeCurrentSessionId(sortedSessions),
+    };
 }
 
-async function getOrCreateSession(chatId, workspace) {
-    const sessionKey = getChatProjectKey(chatId, workspace.projectPath);
-    const existingSession = sessionByChatProject.get(sessionKey);
-    if (existingSession) {
-        try {
-            await axios.get(`${workspace.baseUrl}/session/${existingSession}`);
-            return existingSession;
-        } catch {
-            sessionByChatProject.delete(sessionKey);
-        }
+function pickSessionIdForChat(sessions, existingSessionId, opencodeCurrentSessionId, options = {}) {
+    const preferMostRecent = options.preferMostRecent === true;
+    const validSessionIds = new Set(
+        sessions
+            .map((session) => (typeof session?.id === "string" ? session.id : ""))
+            .filter(Boolean),
+    );
+
+    if (opencodeCurrentSessionId && validSessionIds.has(opencodeCurrentSessionId)) {
+        return opencodeCurrentSessionId;
     }
 
-    const directory = await loadSessionDirectory(chatId, workspace);
-    const latestSessionId = directory.items[0]?.id;
-    if (latestSessionId) {
-        sessionByChatProject.set(sessionKey, latestSessionId);
-        return latestSessionId;
+    if (!preferMostRecent && existingSessionId && validSessionIds.has(existingSessionId)) {
+        return existingSessionId;
+    }
+
+    const mostRecentSessionId = typeof sessions[0]?.id === "string" ? sessions[0].id : null;
+    if (mostRecentSessionId) return mostRecentSessionId;
+
+    if (existingSessionId && validSessionIds.has(existingSessionId)) {
+        return existingSessionId;
+    }
+
+    return null;
+}
+
+async function getOrCreateSession(chatId, workspace, options = {}) {
+    const allowCreate = options.allowCreate !== false;
+    const preferMostRecent = options.preferMostRecent === true;
+    const sessionKey = getChatProjectKey(chatId, workspace.projectPath);
+    const existingSession = sessionByChatProject.get(sessionKey);
+
+    const { sessions, currentSessionId } = await loadSessionDirectory(chatId, workspace);
+    const pickedSessionId = pickSessionIdForChat(sessions, existingSession, currentSessionId, {
+        preferMostRecent,
+    });
+
+    if (pickedSessionId) {
+        sessionByChatProject.set(sessionKey, pickedSessionId);
+        return pickedSessionId;
+    }
+
+    if (!allowCreate) {
+        sessionByChatProject.delete(sessionKey);
+        return null;
     }
 
     const createRes = await axios.post(`${workspace.baseUrl}/session`, {
@@ -1185,7 +1639,7 @@ async function createNewSession(chatId, workspace, title) {
 }
 
 async function clearSessionsForProject(chatId, workspace) {
-    const directory = await loadSessionDirectory(chatId, workspace);
+    const { directory } = await loadSessionDirectory(chatId, workspace);
     if (directory.items.length === 0) {
         return { deleted: 0, failed: [] };
     }
@@ -1210,7 +1664,7 @@ async function clearSessionsForProject(chatId, workspace) {
     const sessionKey = getChatProjectKey(chatId, workspace.projectPath);
     sessionByChatProject.delete(sessionKey);
 
-    const refreshedDirectory = await loadSessionDirectory(chatId, workspace);
+    const { directory: refreshedDirectory } = await loadSessionDirectory(chatId, workspace);
     const nextSessionId = refreshedDirectory.items[0]?.id;
     if (nextSessionId) {
         sessionByChatProject.set(sessionKey, nextSessionId);
@@ -1220,7 +1674,7 @@ async function clearSessionsForProject(chatId, workspace) {
 }
 
 async function switchSessionBySelector(chatId, workspace, wanted) {
-    const directory = await loadSessionDirectory(chatId, workspace);
+    const { directory } = await loadSessionDirectory(chatId, workspace);
     const wantedLower = wanted.toLowerCase();
     let targetSessionId = directory.slugToSessionId.get(wantedLower);
 
@@ -1378,13 +1832,76 @@ async function switchProjectBySlug(chatId, slug) {
 
     const runtime = await ensureWorkspaceRuntime(project.path);
     activeProjectPathByChat.set(chatId, project.path);
-    await getOrCreateSession(chatId, runtime);
+    const sessionId = await getOrCreateSession(chatId, runtime);
     await syncTelegramCommands();
+    await syncTelegramChatFromSession(chatId, runtime, sessionId, { clearChat: true });
 
     return {
         ok: true,
-        message: `Switched project to ${project.label}/${project.name}\nPath: ${project.path}\nOpenCode: ${runtime.baseUrl} (port ${runtime.port})`,
+        message: `Switched project to ${project.label}/${project.name}\nPath: ${project.path}\nOpenCode: ${runtime.baseUrl} (port ${runtime.port})\nSession synced to Telegram.`,
     };
+}
+
+async function liveSyncTelegramChatsFromSessions() {
+    if (liveSyncInFlight) return;
+    liveSyncInFlight = true;
+
+    try {
+        for (const [chatProjectKey, sessionId] of sessionByChatProject.entries()) {
+            if (typeof sessionId !== "string" || sessionId.trim() === "") continue;
+
+            const parsed = parseChatProjectKey(chatProjectKey);
+            if (!parsed) continue;
+
+            const { chatId, projectPath } = parsed;
+            if (activeProjectPathByChat.get(chatId) !== projectPath) continue;
+
+            const runtime = workspaceRuntimeByProjectPath.get(projectPath);
+            if (!runtime || !runtime.baseUrl || runtime.status !== "ready") continue;
+
+            try {
+                const rawMessages = await fetchSessionMessages(runtime, sessionId);
+                if (rawMessages.length === 0) continue;
+
+                const freshMessages = [];
+                for (let i = 0; i < rawMessages.length; i += 1) {
+                    const message = rawMessages[i];
+                    if (!shouldSyncMessageToTelegram(message)) continue;
+                    const formatted = formatSessionMessageForTelegram(message);
+                    if (!formatted) continue;
+                    if (isKnownSessionMessage(chatProjectKey, message, i)) continue;
+                    freshMessages.push(message);
+                }
+
+                if (freshMessages.length === 0) {
+                    rememberSessionMessageKeys(chatProjectKey, rawMessages);
+                    continue;
+                }
+
+                for (const message of freshMessages) {
+                    const formatted = formatSessionMessageForTelegram(message);
+                    if (!formatted) continue;
+
+                    const chunks = splitForTelegram(formatted);
+                    for (const chunk of chunks) {
+                        await sendTrackedMessage(chatId, chunk);
+                    }
+                }
+
+                rememberSessionMessageKeys(chatProjectKey, rawMessages);
+            } catch (err) {
+                console.warn("Live session sync failed", {
+                    chatId,
+                    projectPath,
+                    sessionId,
+                    status: err?.response?.status,
+                    message: err?.message,
+                });
+            }
+        }
+    } finally {
+        liveSyncInFlight = false;
+    }
 }
 
 function getActiveProjectCommandMap(chatId) {
@@ -1464,7 +1981,7 @@ bot.on("message", async (msg) => {
             }
 
             if (telegramCommand === "sessions") {
-                const directory = await loadSessionDirectory(chatId, workspace);
+                const { directory } = await loadSessionDirectory(chatId, workspace);
                 if (directory.items.length === 0) {
                     await sendTrackedMessage(chatId, "No sessions found.");
                     return;
@@ -1509,14 +2026,21 @@ bot.on("message", async (msg) => {
 
             if (telegramCommand === "session") {
                 const current = await getOrCreateSession(chatId, workspace);
-                const directory = await loadSessionDirectory(chatId, workspace);
+                const { directory } = await loadSessionDirectory(chatId, workspace);
                 const projectLine = getActiveProjectDescription(chatId) ?? workspace.projectName;
                 await sendTrackedMessage(chatId, `Current project: ${projectLine}\nCurrent session: ${describeSession(directory, current)}`);
                 return;
             }
 
             if (telegramCommand === "refresh") {
-                const current = await getOrCreateSession(chatId, workspace);
+                const current = await getOrCreateSession(chatId, workspace, {
+                    allowCreate: false,
+                    preferMostRecent: true,
+                });
+                if (!current) {
+                    await sendTrackedMessage(chatId, "No sessions found for this project.");
+                    return;
+                }
                 await syncTelegramChatFromSession(chatId, workspace, current, { clearChat: true });
                 return;
             }
@@ -1554,6 +2078,7 @@ bot.on("message", async (msg) => {
                 res = interaction.response;
                 if (interaction.reply) {
                     await sendTrackedMessage(chatId, interaction.reply);
+                    await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
                     return;
                 }
             } else {
@@ -1569,6 +2094,7 @@ bot.on("message", async (msg) => {
                 res = interaction.response;
                 if (interaction.reply) {
                     await sendTrackedMessage(chatId, interaction.reply);
+                    await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
                     return;
                 }
             }
@@ -1581,6 +2107,7 @@ bot.on("message", async (msg) => {
             res = interaction.response;
             if (interaction.reply) {
                 await sendTrackedMessage(chatId, interaction.reply);
+                await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
                 return;
             }
         }
@@ -1607,6 +2134,10 @@ bot.on("message", async (msg) => {
         }
 
         await sendTrackedMessage(chatId, reply);
+        const sessionId = sessionByChatProject.get(getChatProjectKey(chatId, workspace.projectPath));
+        if (sessionId) {
+            await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
+        }
     } catch (err) {
         console.error("Telegram message handling failed", {
             message: err?.message,
@@ -1627,7 +2158,7 @@ bot.on("callback_query", async (query) => {
 
     if (!chatId || (!data.startsWith("switch:") && !data.startsWith("project:"))) {
         console.log("Callback ignored - invalid chatId or data", { chatId, data });
-        if (query?.id) await bot.answerCallbackQuery(query.id).catch(() => {});
+        await answerCallbackQuerySafely(query?.id);
         return;
     }
 
@@ -1652,12 +2183,10 @@ bot.on("callback_query", async (query) => {
 
         console.log("Callback result", { ok: result?.ok, message: result?.message?.slice(0, 50) });
 
-        if (query?.id) {
-            await bot.answerCallbackQuery(query.id, {
-                text: truncateText(result.message, 180),
-                show_alert: false,
-            });
-        }
+        await answerCallbackQuerySafely(query?.id, {
+            text: truncateText(result.message, 180),
+            show_alert: false,
+        });
 
         if (data.startsWith("switch:") && result?.ok && result?.sessionId && callbackWorkspace) {
             await syncTelegramChatFromSession(chatId, callbackWorkspace, result.sessionId, { clearChat: true });
@@ -1670,14 +2199,24 @@ bot.on("callback_query", async (query) => {
             message: err?.message,
             stack: err?.stack?.split("\n").slice(0, 3),
         });
-        if (query?.id) {
-            await bot.answerCallbackQuery(query.id, {
-                text: "Failed to switch",
-                show_alert: true,
-            });
-        }
+        await answerCallbackQuerySafely(query?.id, {
+            text: "Failed to switch",
+            show_alert: true,
+        });
         await sendTrackedMessage(chatId, `⚠️ Error: ${err?.message ?? "Unknown error"}`);
     }
+});
+
+bot.on("polling_error", (err) => {
+    console.error("Telegram polling error", {
+        code: err?.code,
+        message: err?.message,
+        description: err?.response?.body?.description,
+    });
+});
+
+process.on("unhandledRejection", (reason) => {
+    console.error("Unhandled promise rejection", reason);
 });
 
 syncTelegramCommands().catch((err) => {
@@ -1689,3 +2228,9 @@ setInterval(() => {
         console.error("Failed to refresh Telegram commands", err?.message ?? err);
     });
 }, COMMAND_REFRESH_MS);
+
+setInterval(() => {
+    liveSyncTelegramChatsFromSessions().catch((err) => {
+        console.error("Live Telegram sync failed", err?.message ?? err);
+    });
+}, TELEGRAM_LIVE_SYNC_INTERVAL_MS);
