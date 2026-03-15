@@ -14,16 +14,17 @@ services:
       OPENCODE_SESSION_STORE: redis
       REDIS_URL: redis://redis:6379
     ports:
-      - "4096:4096"
+      - "62771:62771"
     depends_on:
       - redis
 
   telegram-bot:
     build:
-      context: ./telegram-bot
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     environment:
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
-      OPENCODE_URL: http://opencode:4096
+      OPENCODE_BASE_URL: http://opencode:62771
     depends_on:
       - opencode

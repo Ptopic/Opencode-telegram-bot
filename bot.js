@@ -1,8 +1,6 @@
 import axios from "axios";
 import TelegramBot from "node-telegram-bot-api";
 import { readdir } from "node:fs/promises";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
@@ -12,7 +10,7 @@ const COMMAND_CACHE_MS = 2 * 60 * 1000;
 const MODE_CACHE_MS = 2 * 60 * 1000;
 const WORKSPACE_HEALTH_TIMEOUT_MS = 20000;
 const WORKSPACE_HEALTH_POLL_MS = 400;
-const OPENCODE_FIXED_PORT = Number(process.env.OPENCODE_FIXED_PORT) || 62771;
+const OPENCODE_BASE_URL = (process.env.OPENCODE_BASE_URL || process.env.OPENCODE_URL || "http://127.0.0.1:4096").replace(/\/+$/, "");
 const PROJECT_BUTTON_LIMIT = 80;
 const INTERACTION_REQUEST_TIMEOUT_MS = Number(process.env.OPENCODE_INTERACTION_TIMEOUT_MS) || 45000;
 const INTERACTION_RETRY_LIMIT = 1;
@@ -934,6 +932,17 @@ function buildPatchSummaryForMessage(message) {
     ].join("\n");
 }
 
+function getMessageContentFingerprint(message) {
+    const role = getMessageRole(message) ?? "unknown";
+    const text = extractReply(message).replace(/\s+/g, " ").trim();
+    const patchSummary = TELEGRAM_SYNC_INCLUDE_CODE_CHANGES ? buildPatchSummaryForMessage(message) : "";
+    const normalizedPatch = patchSummary.replace(/\s+/g, " ").trim();
+    const combined = [role, text, normalizedPatch].join("|");
+
+    if (combined === "||") return "empty";
+    return `${combined.length}:${combined.slice(0, 240)}`;
+}
+
 function getSessionMessageKey(message, fallbackIndex = 0) {
     if (!message || typeof message !== "object") {
         return `fallback:${fallbackIndex}`;
@@ -953,10 +962,10 @@ function getSessionMessageKey(message, fallbackIndex = 0) {
 
     for (const candidate of idCandidates) {
         if (typeof candidate === "string" && candidate.trim() !== "") {
-            return `id:${candidate.trim()}`;
+            return `id:${candidate.trim()}:${getMessageContentFingerprint(message)}`;
         }
         if (typeof candidate === "number" && Number.isFinite(candidate)) {
-            return `id:${candidate}`;
+            return `id:${candidate}:${getMessageContentFingerprint(message)}`;
         }
     }
 
@@ -1276,10 +1285,9 @@ async function runWorkspaceInteraction(workspace, sessionId, endpoint, payload) 
 }
 
 async function restartWorkspaceRuntime(projectPath, reason) {
-    const runtime = await stopWorkspaceRuntime(projectPath, {
-        reason,
-        clearCaches: true,
-    });
+    const runtime = ensureWorkspaceRecord(projectPath);
+    runtime.status = "stale";
+    runtime.lastUsedAt = Date.now();
 
     console.warn("Restarting workspace runtime", {
         projectPath,
@@ -1292,23 +1300,8 @@ async function restartWorkspaceRuntime(projectPath, reason) {
 
 async function stopWorkspaceRuntime(projectPath, options = {}) {
     const runtime = ensureWorkspaceRecord(projectPath);
-    const child = runtime.child;
-
-    if (child && child.exitCode === null) {
-        child.kill("SIGTERM");
-        try {
-            await Promise.race([
-                once(child, "exit"),
-                new Promise((resolve) => setTimeout(resolve, 1500)),
-            ]);
-        } catch {}
-    }
-
-    runtime.status = "stopped";
-    runtime.child = null;
-    runtime.port = null;
-    runtime.baseUrl = null;
-    runtime.startPromise = null;
+    runtime.status = "ready";
+    runtime.baseUrl = OPENCODE_BASE_URL;
     runtime.lastUsedAt = Date.now();
 
     if (options.clearCaches) {
@@ -1321,16 +1314,8 @@ async function stopWorkspaceRuntime(projectPath, options = {}) {
 }
 
 async function stopAllWorkspaceRuntimesExcept(projectPath, reason) {
-    const entries = [...workspaceRuntimeByProjectPath.entries()];
-    for (const [otherProjectPath, runtime] of entries) {
-        if (otherProjectPath === projectPath) continue;
-        if (!runtime?.child || runtime.child.exitCode !== null) continue;
-
-        await stopWorkspaceRuntime(otherProjectPath, {
-            reason,
-            clearCaches: true,
-        });
-    }
+    void projectPath;
+    void reason;
 }
 
 async function postWorkspaceInteraction(workspace, sessionId, endpoint, payload) {
@@ -1364,11 +1349,8 @@ function ensureWorkspaceRecord(projectPath) {
         projectPath,
         projectName: project.name,
         projectLabel: project.label,
-        status: "stopped",
-        port: null,
-        baseUrl: null,
-        child: null,
-        startPromise: null,
+        status: "ready",
+        baseUrl: OPENCODE_BASE_URL,
         lastUsedAt: Date.now(),
     };
     workspaceRuntimeByProjectPath.set(projectPath, runtime);
@@ -1400,89 +1382,18 @@ async function ensureWorkspaceRuntime(projectPath) {
     const runtime = ensureWorkspaceRecord(projectPath);
     runtime.lastUsedAt = Date.now();
 
-    if (runtime.status === "ready" && runtime.child && runtime.child.exitCode === null && runtime.baseUrl) {
+    if (!runtime.baseUrl) {
+        runtime.baseUrl = OPENCODE_BASE_URL;
+    }
+
+    if (runtime.status === "ready") {
         return runtime;
     }
 
-    if (runtime.startPromise) {
-        return await runtime.startPromise;
-    }
-
-    runtime.startPromise = (async () => {
-        const port = OPENCODE_FIXED_PORT;
-        const baseUrl = `http://127.0.0.1:${port}`;
-
-        const child = spawn("opencode", ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
-            cwd: projectPath,
-            env: process.env,
-            stdio: ["ignore", "pipe", "pipe"],
-        });
-
-        runtime.child = child;
-        runtime.port = port;
-        runtime.baseUrl = baseUrl;
-        runtime.status = "starting";
-
-        child.stdout?.on("data", (chunk) => {
-            const text = chunk.toString().trim();
-            if (text) {
-                console.log(`[workspace:${runtime.projectName}] ${text}`);
-            }
-        });
-
-        child.stderr?.on("data", (chunk) => {
-            const text = chunk.toString().trim();
-            if (text) {
-                console.error(`[workspace:${runtime.projectName}:err] ${text}`);
-            }
-        });
-
-        child.once("exit", (code, signal) => {
-            if (runtime.child === child) {
-                runtime.status = "stopped";
-                runtime.child = null;
-                runtime.port = null;
-                runtime.baseUrl = null;
-            }
-
-            if (runtime.startPromise && runtime.child !== child) {
-                return;
-            }
-
-            runtime.startPromise = null;
-            console.warn("Workspace runtime exited", {
-                projectPath,
-                projectName: runtime.projectName,
-                code,
-                signal,
-            });
-        });
-
-        child.once("error", (err) => {
-            console.error("Workspace runtime spawn failed", {
-                projectPath,
-                projectName: runtime.projectName,
-                message: err?.message,
-            });
-        });
-
-        try {
-            await waitForWorkspaceHealthy(baseUrl, WORKSPACE_HEALTH_TIMEOUT_MS);
-            runtime.status = "ready";
-            runtime.lastUsedAt = Date.now();
-            return runtime;
-        } catch (err) {
-            runtime.status = "error";
-            if (child.exitCode === null) {
-                child.kill("SIGTERM");
-            }
-            throw err;
-        } finally {
-            runtime.startPromise = null;
-        }
-    })();
-
-    return await runtime.startPromise;
+    await waitForWorkspaceHealthy(runtime.baseUrl, WORKSPACE_HEALTH_TIMEOUT_MS);
+    runtime.status = "ready";
+    runtime.lastUsedAt = Date.now();
+    return runtime;
 }
 
 function getActiveProjectPath(chatId) {
@@ -1855,7 +1766,6 @@ async function switchProjectBySlug(chatId, slug) {
         return { ok: false, message: "Project not found. Run /projects again." };
     }
 
-    await stopAllWorkspaceRuntimesExcept(project.path, "project switch");
     const runtime = await ensureWorkspaceRuntime(project.path);
     activeProjectPathByChat.set(chatId, project.path);
     const sessionId = await createNewSession(chatId, runtime);
@@ -1864,7 +1774,7 @@ async function switchProjectBySlug(chatId, slug) {
 
     return {
         ok: true,
-        message: `Switched project to ${project.label}/${project.name}\nPath: ${project.path}\nOpenCode: ${runtime.baseUrl} (port ${runtime.port})\nStarted a new project session and synced to Telegram.`,
+        message: `Switched project to ${project.label}/${project.name}\nPath: ${project.path}\nOpenCode: ${runtime.baseUrl} (shared server)\nStarted a new project session and synced to Telegram.`,
     };
 }
 

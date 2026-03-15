@@ -30,7 +30,8 @@ Required env var:
 Optional:
 
 - `OPENCODE_TELEGRAM_ENV_FILE` (custom env file path)
-- `OPENCODE_FIXED_PORT` (OpenCode server port used across all project switches, default `62771`)
+- `OPENCODE_BASE_URL` (shared OpenCode server URL, default `http://127.0.0.1:4096`)
+- `OPENCODE_URL` (legacy alias for `OPENCODE_BASE_URL`)
 
 ## Docker fallback
 
@@ -39,3 +40,6 @@ From repository root:
 ```bash
 docker compose up --build
 ```
+
+The bot does not spawn `opencode serve`. Start OpenCode separately (for example with Docker) and point the bot to it using `OPENCODE_BASE_URL`.
+This repo's compose stack runs OpenCode on port `62771`.
