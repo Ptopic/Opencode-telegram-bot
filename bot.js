@@ -10,6 +10,7 @@ const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 const TYPING_INTERVAL_MS = 4000;
 const COMMAND_REFRESH_MS = 10 * 60 * 1000;
 const COMMAND_CACHE_MS = 2 * 60 * 1000;
+const MODE_CACHE_MS = 2 * 60 * 1000;
 const WORKSPACE_HEALTH_TIMEOUT_MS = 20000;
 const WORKSPACE_HEALTH_POLL_MS = 400;
 const PROJECT_BUTTON_LIMIT = 80;
@@ -43,6 +44,7 @@ const BUILTIN_TELEGRAM_COMMANDS = [
     { command: "new", description: "Start a new OpenCode session" },
     { command: "switch", description: "Switch to session id" },
     { command: "run", description: "Send prompt text to OpenCode" },
+    { command: "mode", description: "Set OpenCode mode (agent)" },
     { command: "commandsync", description: "Refresh Telegram commands" },
     { command: "help", description: "Show available commands" },
 ];
@@ -62,9 +64,11 @@ const projectDirectoryByChat = new Map();
 const workspaceRuntimeByProjectPath = new Map();
 const commandAliasByProjectPath = new Map();
 const commandCacheByProjectPath = new Map();
+const modeCacheByProjectPath = new Map();
 const telegramCommandMap = new Map();
 const trackedMessageIdsByChat = new Map();
 const seenSessionMessageKeysByChatProject = new Map();
+const selectedModeByChatProject = new Map();
 
 let liveSyncInFlight = false;
 
@@ -1917,6 +1921,105 @@ function getActiveProjectDescription(chatId) {
     return `${project.label}/${project.name}`;
 }
 
+function getSelectedMode(chatId, workspace) {
+    if (!workspace?.projectPath) return null;
+    return selectedModeByChatProject.get(getChatProjectKey(chatId, workspace.projectPath)) ?? null;
+}
+
+function setSelectedMode(chatId, workspace, modeName) {
+    if (!workspace?.projectPath) return;
+    const key = getChatProjectKey(chatId, workspace.projectPath);
+    if (typeof modeName === "string" && modeName.trim() !== "") {
+        selectedModeByChatProject.set(key, modeName.trim());
+        return;
+    }
+    selectedModeByChatProject.delete(key);
+}
+
+function withSelectedMode(chatId, workspace, payload) {
+    const mode = getSelectedMode(chatId, workspace);
+    if (!mode) return payload;
+    return { ...payload, agent: mode };
+}
+
+function getModeButtons(modes, currentMode) {
+    const rows = [];
+    for (let i = 0; i < modes.length; i += 2) {
+        const row = [];
+        const left = modes[i];
+        const right = modes[i + 1];
+
+        if (left) {
+            const label = left.name === currentMode ? `✅ ${left.name}` : left.name;
+            row.push({ text: label, callback_data: `mode:${encodeURIComponent(left.name)}` });
+        }
+
+        if (right) {
+            const label = right.name === currentMode ? `✅ ${right.name}` : right.name;
+            row.push({ text: label, callback_data: `mode:${encodeURIComponent(right.name)}` });
+        }
+
+        if (row.length > 0) rows.push(row);
+    }
+
+    return rows;
+}
+
+async function loadSelectableModes(workspace) {
+    if (!workspace?.projectPath || !workspace?.baseUrl) return [];
+
+    const cached = modeCacheByProjectPath.get(workspace.projectPath);
+    if (cached && Date.now() - cached.updatedAt < MODE_CACHE_MS) {
+        return cached.modes;
+    }
+
+    try {
+        const res = await axios.get(`${workspace.baseUrl}/agent`, { timeout: 10000 });
+        const rawAgents = Array.isArray(res?.data)
+            ? res.data
+            : Array.isArray(res?.data?.agents)
+                ? res.data.agents
+                : [];
+
+        const modes = rawAgents
+            .filter((agent) => agent && typeof agent === "object")
+            .filter((agent) => typeof agent.name === "string" && agent.name.trim() !== "")
+            .filter((agent) => {
+                const mode = typeof agent.mode === "string" ? agent.mode.toLowerCase() : "";
+                return mode !== "subagent";
+            })
+            .map((agent) => ({
+                name: agent.name.trim(),
+                description: typeof agent.description === "string" ? agent.description.trim() : "",
+            }));
+
+        modes.sort((a, b) => {
+            const rank = (name) => {
+                const lower = name.toLowerCase();
+                if (lower === "build") return 0;
+                if (lower === "plan") return 1;
+                return 10;
+            };
+            return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
+        });
+
+        modeCacheByProjectPath.set(workspace.projectPath, {
+            updatedAt: Date.now(),
+            modes,
+        });
+
+        return modes;
+    } catch (err) {
+        console.error("Failed loading OpenCode modes", {
+            projectPath: workspace.projectPath,
+            baseUrl: workspace.baseUrl,
+            status: err?.response?.status,
+            message: err?.message,
+        });
+        return [];
+    }
+}
+
 bot.on("message", async (msg) => {
     const chatId = msg.chat.id;
     trackMessageId(chatId, msg.message_id);
@@ -2028,7 +2131,41 @@ bot.on("message", async (msg) => {
                 const current = await getOrCreateSession(chatId, workspace);
                 const { directory } = await loadSessionDirectory(chatId, workspace);
                 const projectLine = getActiveProjectDescription(chatId) ?? workspace.projectName;
-                await sendTrackedMessage(chatId, `Current project: ${projectLine}\nCurrent session: ${describeSession(directory, current)}`);
+                const modeLine = getSelectedMode(chatId, workspace) ?? "default";
+                await sendTrackedMessage(
+                    chatId,
+                    `Current project: ${projectLine}\nCurrent session: ${describeSession(directory, current)}\nMode: ${modeLine}`,
+                );
+                return;
+            }
+
+            if (telegramCommand === "mode") {
+                const modes = await loadSelectableModes(workspace);
+                if (modes.length === 0) {
+                    await sendTrackedMessage(chatId, "No selectable modes found from OpenCode /agent endpoint.");
+                    return;
+                }
+
+                const wanted = trimmed.slice(firstToken.length).trim();
+                if (wanted) {
+                    const selected = modes.find((mode) => mode.name.toLowerCase() === wanted.toLowerCase());
+                    if (!selected) {
+                        const names = modes.map((mode) => mode.name).join(", ");
+                        await sendTrackedMessage(chatId, `Mode not found. Available: ${names}`);
+                        return;
+                    }
+
+                    setSelectedMode(chatId, workspace, selected.name);
+                    await sendTrackedMessage(chatId, `Mode set to ${selected.name}.`);
+                    return;
+                }
+
+                const currentMode = getSelectedMode(chatId, workspace);
+                await sendTrackedMessage(chatId, `Select OpenCode mode\nCurrent: ${currentMode ?? "default"}`, {
+                    reply_markup: {
+                        inline_keyboard: getModeButtons(modes, currentMode),
+                    },
+                });
                 return;
             }
 
@@ -2072,6 +2209,7 @@ bot.on("message", async (msg) => {
                 }
 
                 const interaction = await runWorkspaceInteraction(workspace, sessionId, "message", {
+                    ...withSelectedMode(chatId, workspace, {}),
                     parts: [{ type: "text", text: prompt }],
                 });
                 workspace = interaction.workspace;
@@ -2087,6 +2225,7 @@ bot.on("message", async (msg) => {
                 const argumentsText = trimmed.slice(firstToken.length).trim();
 
                 const interaction = await runWorkspaceInteraction(workspace, sessionId, "command", {
+                    ...withSelectedMode(chatId, workspace, {}),
                     command,
                     arguments: argumentsText,
                 });
@@ -2101,6 +2240,7 @@ bot.on("message", async (msg) => {
         } else {
             const sessionId = await getOrCreateSession(chatId, workspace);
             const interaction = await runWorkspaceInteraction(workspace, sessionId, "message", {
+                ...withSelectedMode(chatId, workspace, {}),
                 parts: [{ type: "text", text }],
             });
             workspace = interaction.workspace;
@@ -2156,7 +2296,7 @@ bot.on("callback_query", async (query) => {
 
     console.log("Callback received", { chatId, data, hasMessage: !!query?.message });
 
-    if (!chatId || (!data.startsWith("switch:") && !data.startsWith("project:"))) {
+    if (!chatId || (!data.startsWith("switch:") && !data.startsWith("project:") && !data.startsWith("mode:"))) {
         console.log("Callback ignored - invalid chatId or data", { chatId, data });
         await answerCallbackQuerySafely(query?.id);
         return;
@@ -2168,7 +2308,8 @@ bot.on("callback_query", async (query) => {
         let callbackWorkspace = null;
         const result = data.startsWith("project:")
             ? await switchProjectBySlug(chatId, data.slice("project:".length))
-            : await (async () => {
+            : data.startsWith("switch:")
+              ? await (async () => {
                 const projectPath = getActiveProjectPath(chatId);
                 console.log("Switch session - active project path", { projectPath, chatId });
                 if (!projectPath) {
@@ -2179,7 +2320,25 @@ bot.on("callback_query", async (query) => {
                 const selector = data.slice("switch:".length);
                 console.log("Switching session", { selector, workspace: workspace.projectName });
                 return await switchSessionBySelector(chatId, workspace, selector);
-            })();
+              })()
+              : await (async () => {
+                const projectPath = getActiveProjectPath(chatId);
+                if (!projectPath) {
+                    return { ok: false, message: "Select a project first with /projects." };
+                }
+
+                const workspace = await ensureWorkspaceRuntime(projectPath);
+                callbackWorkspace = workspace;
+                const requested = decodeURIComponent(data.slice("mode:".length));
+                const modes = await loadSelectableModes(workspace);
+                const selected = modes.find((mode) => mode.name === requested);
+                if (!selected) {
+                    return { ok: false, message: "Mode no longer available. Run /mode again." };
+                }
+
+                setSelectedMode(chatId, workspace, selected.name);
+                return { ok: true, message: `Mode set to ${selected.name}.` };
+              })();
 
         console.log("Callback result", { ok: result?.ok, message: result?.message?.slice(0, 50) });
 
