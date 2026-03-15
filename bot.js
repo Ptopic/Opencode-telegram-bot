@@ -1,7 +1,6 @@
 import axios from "axios";
 import TelegramBot from "node-telegram-bot-api";
 import { readdir } from "node:fs/promises";
-import { createServer } from "node:net";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 
@@ -13,6 +12,7 @@ const COMMAND_CACHE_MS = 2 * 60 * 1000;
 const MODE_CACHE_MS = 2 * 60 * 1000;
 const WORKSPACE_HEALTH_TIMEOUT_MS = 20000;
 const WORKSPACE_HEALTH_POLL_MS = 400;
+const OPENCODE_FIXED_PORT = Number(process.env.OPENCODE_FIXED_PORT) || 62771;
 const PROJECT_BUTTON_LIMIT = 80;
 const INTERACTION_REQUEST_TIMEOUT_MS = Number(process.env.OPENCODE_INTERACTION_TIMEOUT_MS) || 45000;
 const INTERACTION_RETRY_LIMIT = 1;
@@ -288,8 +288,20 @@ function shortSessionSuffix(sessionId) {
     return sessionId.slice(0, 4).toLowerCase();
 }
 
+function formatSessionTimestamp(value = new Date()) {
+    const pad2 = (part) => String(part).padStart(2, "0");
+    return [
+        value.getFullYear(),
+        pad2(value.getMonth() + 1),
+        pad2(value.getDate()),
+    ].join("") + ["-", pad2(value.getHours()), pad2(value.getMinutes()), pad2(value.getSeconds())].join("");
+}
+
 function defaultSessionTitle(chatId, workspaceName) {
-    return workspaceName ? `telegram-${chatId}-${workspaceName}` : `telegram-${chatId}`;
+    const projectName = sanitizeProjectSlug(workspaceName || "project") || "project";
+    const timestamp = formatSessionTimestamp();
+    const randomSuffix = Math.random().toString(36).slice(2, 6);
+    return `${projectName}-tg-${chatId}-${timestamp}-${randomSuffix}`;
 }
 
 function truncateText(value, maxLength) {
@@ -1264,6 +1276,21 @@ async function runWorkspaceInteraction(workspace, sessionId, endpoint, payload) 
 }
 
 async function restartWorkspaceRuntime(projectPath, reason) {
+    const runtime = await stopWorkspaceRuntime(projectPath, {
+        reason,
+        clearCaches: true,
+    });
+
+    console.warn("Restarting workspace runtime", {
+        projectPath,
+        projectName: runtime.projectName,
+        reason: reason?.message ?? String(reason ?? "unknown"),
+    });
+
+    return await ensureWorkspaceRuntime(projectPath);
+}
+
+async function stopWorkspaceRuntime(projectPath, options = {}) {
     const runtime = ensureWorkspaceRecord(projectPath);
     const child = runtime.child;
 
@@ -1283,16 +1310,27 @@ async function restartWorkspaceRuntime(projectPath, reason) {
     runtime.baseUrl = null;
     runtime.startPromise = null;
     runtime.lastUsedAt = Date.now();
-    commandAliasByProjectPath.delete(projectPath);
-    commandCacheByProjectPath.delete(projectPath);
 
-    console.warn("Restarting workspace runtime", {
-        projectPath,
-        projectName: runtime.projectName,
-        reason: reason?.message ?? String(reason ?? "unknown"),
-    });
+    if (options.clearCaches) {
+        commandAliasByProjectPath.delete(projectPath);
+        commandCacheByProjectPath.delete(projectPath);
+        modeCacheByProjectPath.delete(projectPath);
+    }
 
-    return await ensureWorkspaceRuntime(projectPath);
+    return runtime;
+}
+
+async function stopAllWorkspaceRuntimesExcept(projectPath, reason) {
+    const entries = [...workspaceRuntimeByProjectPath.entries()];
+    for (const [otherProjectPath, runtime] of entries) {
+        if (otherProjectPath === projectPath) continue;
+        if (!runtime?.child || runtime.child.exitCode !== null) continue;
+
+        await stopWorkspaceRuntime(otherProjectPath, {
+            reason,
+            clearCaches: true,
+        });
+    }
 }
 
 async function postWorkspaceInteraction(workspace, sessionId, endpoint, payload) {
@@ -1315,23 +1353,6 @@ async function postWorkspaceInteraction(workspace, sessionId, endpoint, payload)
     }
 
     throw new Error("Workspace interaction retry limit exceeded");
-}
-
-async function findOpenPort() {
-    return await new Promise((resolve, reject) => {
-        const server = createServer();
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-            const address = server.address();
-            server.close(() => {
-                if (!address || typeof address !== "object") {
-                    reject(new Error("Failed to allocate port"));
-                    return;
-                }
-                resolve(address.port);
-            });
-        });
-    });
 }
 
 function ensureWorkspaceRecord(projectPath) {
@@ -1388,7 +1409,7 @@ async function ensureWorkspaceRuntime(projectPath) {
     }
 
     runtime.startPromise = (async () => {
-        const port = await findOpenPort();
+        const port = OPENCODE_FIXED_PORT;
         const baseUrl = `http://127.0.0.1:${port}`;
 
         const child = spawn("opencode", ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
@@ -1834,15 +1855,16 @@ async function switchProjectBySlug(chatId, slug) {
         return { ok: false, message: "Project not found. Run /projects again." };
     }
 
+    await stopAllWorkspaceRuntimesExcept(project.path, "project switch");
     const runtime = await ensureWorkspaceRuntime(project.path);
     activeProjectPathByChat.set(chatId, project.path);
-    const sessionId = await getOrCreateSession(chatId, runtime);
+    const sessionId = await createNewSession(chatId, runtime);
     await syncTelegramCommands();
     await syncTelegramChatFromSession(chatId, runtime, sessionId, { clearChat: true });
 
     return {
         ok: true,
-        message: `Switched project to ${project.label}/${project.name}\nPath: ${project.path}\nOpenCode: ${runtime.baseUrl} (port ${runtime.port})\nSession synced to Telegram.`,
+        message: `Switched project to ${project.label}/${project.name}\nPath: ${project.path}\nOpenCode: ${runtime.baseUrl} (port ${runtime.port})\nStarted a new project session and synced to Telegram.`,
     };
 }
 

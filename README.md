@@ -30,6 +30,7 @@ Required env var:
 Optional:
 
 - `OPENCODE_TELEGRAM_ENV_FILE` (custom env file path)
+- `OPENCODE_FIXED_PORT` (OpenCode server port used across all project switches, default `62771`)
 
 ## Docker fallback
 
