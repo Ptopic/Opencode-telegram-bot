@@ -1544,6 +1544,8 @@ async function getOrCreateSession(chatId, workspace, options = {}) {
 
     const createRes = await axios.post(`${workspace.baseUrl}/session`, {
         title: defaultSessionTitle(chatId, workspace.projectName),
+        directory: workspace.projectPath,
+        cwd: workspace.projectPath,
     });
 
     const sessionId = createRes?.data?.id;
@@ -1560,6 +1562,8 @@ async function getOrCreateSession(chatId, workspace, options = {}) {
 async function createNewSession(chatId, workspace, title) {
     const createRes = await axios.post(`${workspace.baseUrl}/session`, {
         title: title && title.trim() !== "" ? title.trim() : defaultSessionTitle(chatId, workspace.projectName),
+        directory: workspace.projectPath,
+        cwd: workspace.projectPath,
     });
 
     const sessionId = createRes?.data?.id;

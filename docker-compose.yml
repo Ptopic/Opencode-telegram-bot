@@ -10,9 +10,11 @@ services:
     restart: unless-stopped
     volumes:
       - ${HOME}/Desktop:/Users/petartopic/Desktop
+      - ${HOME}/.config/opencode:/root/.config/opencode
     environment:
       OPENCODE_SESSION_STORE: redis
       REDIS_URL: redis://redis:6379
+      OPENCODE_CONFIG_DIR: /root/.config/opencode
     ports:
       - "62771:62771"
     depends_on:
@@ -23,6 +25,8 @@ services:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
+    volumes:
+      - ${HOME}/Desktop:/Users/petartopic/Desktop
     environment:
       TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
       OPENCODE_BASE_URL: http://opencode:62771

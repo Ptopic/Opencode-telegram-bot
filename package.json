@@ -6,6 +6,8 @@
 		"opencode-telegram": "./bin/opencode-telegram.js"
 	},
 	"scripts": {
+		"dev": "node ./bin/opencode-telegram.js dev",
+		"attach": "node ./bin/opencode-telegram.js attach",
 		"start": "node ./bin/opencode-telegram.js",
 		"start:watch": "nodemon --watch bot.js --watch bin/opencode-telegram.js --exec \"node ./bin/opencode-telegram.js\""
 	},
