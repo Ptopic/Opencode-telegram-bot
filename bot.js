@@ -22,11 +22,10 @@ const TELEGRAM_SYNC_MESSAGE_LIMIT = 80;
 const TELEGRAM_CLEAR_BATCH_SIZE = 50;
 const TELEGRAM_LIVE_SYNC_INTERVAL_MS = Number(process.env.OPENCODE_TELEGRAM_LIVE_SYNC_INTERVAL_MS) || 5000;
 const TELEGRAM_LIVE_SYNC_MAX_TRACKED_KEYS = 2000;
-const TELEGRAM_SYNC_FINAL_ONLY = process.env.OPENCODE_TELEGRAM_SYNC_FINAL_ONLY !== "false";
 const TELEGRAM_SYNC_INCLUDE_THINKING = process.env.OPENCODE_TELEGRAM_SYNC_INCLUDE_THINKING === "true";
 const TELEGRAM_SYNC_INCLUDE_CODE_CHANGES = process.env.OPENCODE_TELEGRAM_SYNC_INCLUDE_CODE_CHANGES === "true";
 const TELEGRAM_SYNC_MIRROR_USER_MESSAGES = process.env.OPENCODE_TELEGRAM_SYNC_MIRROR_USER_MESSAGES !== "false";
-const TELEGRAM_SYNC_USER_PREFIX = process.env.OPENCODE_TELEGRAM_SYNC_USER_PREFIX || "❓";
+const TELEGRAM_SYNC_USER_PREFIX = process.env.OPENCODE_TELEGRAM_SYNC_USER_PREFIX || "👨‍💻";
 
 const PROJECT_ROOTS = [
     { scope: "petar", path: "/Users/petartopic/Desktop/Petar", label: "Petar" },
@@ -859,16 +858,28 @@ function formatSessionMessageForTelegram(message) {
     if (!text && !patchSummary) return null;
 
     const role = getMessageRole(message);
-    const prefix = role === "assistant" ? "OpenCode" : role === "system" ? "System" : "Message";
+    const prefix = role === "assistant" ? "🤖" : role === "system" ? "System" : "Message";
 
     if (role === "user") {
         if (text && patchSummary) {
-            return `${TELEGRAM_SYNC_USER_PREFIX} ${text}\n\n${patchSummary}`;
+            return `${TELEGRAM_SYNC_USER_PREFIX}\n${text}\n\n${patchSummary}`;
         }
         if (text) {
-            return `${TELEGRAM_SYNC_USER_PREFIX} ${text}`;
+            return `${TELEGRAM_SYNC_USER_PREFIX}\n${text}`;
         }
         return patchSummary;
+    }
+
+    if (role === "assistant") {
+        if (text && patchSummary) {
+            return `${prefix}\n${text}\n\n${patchSummary}`;
+        }
+
+        if (text) {
+            return `${prefix}\n${text}`;
+        }
+
+        return `${prefix}\n${patchSummary}`;
     }
 
     if (text && patchSummary) {
@@ -882,16 +893,19 @@ function formatSessionMessageForTelegram(message) {
     return `${prefix}:\n${patchSummary}`;
 }
 
+function formatAssistantReplyForTelegram(text) {
+    if (typeof text !== "string") return text;
+    const trimmed = text.trim();
+    if (!trimmed) return text;
+    if (trimmed.startsWith("🤖\n") || trimmed === "🤖") return text;
+    return `🤖\n${text}`;
+}
+
 function shouldSyncMessageToTelegram(message) {
     const role = getMessageRole(message);
     const hasText = extractReply(message) !== "";
     const hasPatchSummary = TELEGRAM_SYNC_INCLUDE_CODE_CHANGES && buildPatchSummaryForMessage(message) !== "";
     if (!hasText && !hasPatchSummary) return false;
-
-    if (!TELEGRAM_SYNC_FINAL_ONLY) {
-        if (role === "user" && !TELEGRAM_SYNC_MIRROR_USER_MESSAGES) return false;
-        return true;
-    }
 
     if (role === "assistant") return true;
     if (role === "user") return TELEGRAM_SYNC_MIRROR_USER_MESSAGES;
@@ -1120,7 +1134,7 @@ async function syncTelegramChatFromSession(chatId, workspace, sessionId, options
     if (finalMessages.length === 0) {
         await sendTrackedMessage(
             chatId,
-            TELEGRAM_SYNC_FINAL_ONLY ? "Session has no assistant responses yet." : "Session has no text messages yet.",
+            "Session has no assistant responses yet.",
         );
         return;
     }
@@ -2151,7 +2165,7 @@ bot.on("message", async (msg) => {
                 workspace = interaction.workspace;
                 res = interaction.response;
                 if (interaction.reply) {
-                    await sendTrackedMessage(chatId, interaction.reply);
+                    await sendTrackedMessage(chatId, formatAssistantReplyForTelegram(interaction.reply));
                     await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
                     return;
                 }
@@ -2168,7 +2182,7 @@ bot.on("message", async (msg) => {
                 workspace = interaction.workspace;
                 res = interaction.response;
                 if (interaction.reply) {
-                    await sendTrackedMessage(chatId, interaction.reply);
+                    await sendTrackedMessage(chatId, formatAssistantReplyForTelegram(interaction.reply));
                     await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
                     return;
                 }
@@ -2182,7 +2196,7 @@ bot.on("message", async (msg) => {
             workspace = interaction.workspace;
             res = interaction.response;
             if (interaction.reply) {
-                await sendTrackedMessage(chatId, interaction.reply);
+                await sendTrackedMessage(chatId, formatAssistantReplyForTelegram(interaction.reply));
                 await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
                 return;
             }
@@ -2209,7 +2223,7 @@ bot.on("message", async (msg) => {
             reply = "✅ Request processed (no text response)";
         }
 
-        await sendTrackedMessage(chatId, reply);
+        await sendTrackedMessage(chatId, formatAssistantReplyForTelegram(reply));
         const sessionId = sessionByChatProject.get(getChatProjectKey(chatId, workspace.projectPath));
         if (sessionId) {
             await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
