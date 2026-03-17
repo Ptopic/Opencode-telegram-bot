@@ -42,6 +42,7 @@ const BUILTIN_TELEGRAM_COMMANDS = [
     { command: "switch", description: "Switch to session id" },
     { command: "run", description: "Send prompt text to OpenCode" },
     { command: "mode", description: "Set OpenCode mode (agent)" },
+    { command: "stop", description: "Stop current OpenCode session execution" },
     { command: "commandsync", description: "Refresh Telegram commands" },
     { command: "help", description: "Show available commands" },
 ];
@@ -2146,6 +2147,69 @@ bot.on("message", async (msg) => {
                 }
 
                 await syncTelegramChatFromSession(chatId, workspace, result.sessionId, { clearChat: true });
+                return;
+            }
+
+            if (telegramCommand === "stop") {
+                const sessionKey = getChatProjectKey(chatId, workspace.projectPath);
+                const currentSessionId = sessionByChatProject.get(sessionKey);
+
+                if (!currentSessionId) {
+                    await sendTrackedMessage(chatId, "No active session to stop. Start one with /new or send a message.");
+                    return;
+                }
+
+                let stopped = false;
+
+                const sendInterrupt = async () => {
+                    try {
+                        const tuiResponse = await axios.post(`${workspace.baseUrl}/tui/execute-command`, {
+                            command: "session_interrupt",
+                        }, {
+                            timeout: 10000,
+                        });
+                        return tuiResponse?.data === true;
+                    } catch (tuiErr) {
+                        console.warn("TUI execute-command failed", {
+                            message: tuiErr?.message,
+                            status: tuiErr?.response?.status,
+                        });
+                        return false;
+                    }
+                };
+
+                await sendInterrupt();
+                await new Promise((resolve) => setTimeout(resolve, 500));
+                stopped = await sendInterrupt();
+
+                if (!stopped) {
+                    try {
+                        const abortResponse = await axios.post(`${workspace.baseUrl}/session/${currentSessionId}/abort`, {}, {
+                            timeout: 10000,
+                        });
+                        stopped = abortResponse?.data === true;
+                    } catch (abortErr) {
+                        const status = abortErr?.response?.status;
+                        if (status === 404) {
+                            await sendTrackedMessage(chatId, "🛑 Session not found or already idle.");
+                            return;
+                        }
+                        console.error("Failed to abort session", {
+                            sessionId: currentSessionId,
+                            status,
+                            message: abortErr?.message,
+                        });
+                        await sendTrackedMessage(chatId, `⚠️ Failed to stop session: ${abortErr?.message ?? "Unknown error"}`);
+                        return;
+                    }
+                }
+
+                if (stopped) {
+                    sessionByChatProject.delete(sessionKey);
+                    await sendTrackedMessage(chatId, "🛑 OpenCode execution stopped. All tasks and subagents interrupted.");
+                } else {
+                    await sendTrackedMessage(chatId, "⚠️ No active execution found to stop.");
+                }
                 return;
             }
 
