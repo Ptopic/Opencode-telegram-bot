@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { readFileSync, existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -111,7 +111,7 @@ function waitForChildExit(child) {
     });
 }
 
-async function runDevMode() {
+function getManagedServerConfig() {
     const devPort = Number.parseInt(process.env.OPENCODE_DEV_PORT || "62771", 10);
     const devHost = process.env.OPENCODE_DEV_HOST || "0.0.0.0";
 
@@ -119,12 +119,18 @@ async function runDevMode() {
         throw new Error(`Invalid OPENCODE_DEV_PORT: ${process.env.OPENCODE_DEV_PORT}`);
     }
 
-    if (!process.env.OPENCODE_BASE_URL) {
-        process.env.OPENCODE_BASE_URL = `http://127.0.0.1:${devPort}`;
-    }
+    const managedBaseUrl = `http://127.0.0.1:${devPort}`;
+    process.env.OPENCODE_BASE_URL = managedBaseUrl;
+    process.env.OPENCODE_URL = managedBaseUrl;
+
+    return { devPort, devHost, managedBaseUrl };
+}
+
+async function runManagedMode() {
+    const { devPort, devHost, managedBaseUrl } = getManagedServerConfig();
 
     console.log(`Starting OpenCode server on ${devHost}:${devPort}`);
-    console.log(`Using OPENCODE_BASE_URL=${process.env.OPENCODE_BASE_URL}`);
+    console.log(`Using OPENCODE_BASE_URL=${managedBaseUrl}`);
 
     const server = spawnChild("npx", [
         "--yes",
@@ -230,8 +236,15 @@ async function runAttachMode(rawBaseUrl) {
 
 const command = process.argv[2];
 
+if (command === "dev" || !command) {
+    if (!process.env.TELEGRAM_TOKEN) {
+        console.error("Missing TELEGRAM_TOKEN. Set it in environment or .env file.");
+        process.exit(1);
+    }
+}
+
 if (command === "dev") {
-    const exitCode = await runDevMode();
+    const exitCode = await runManagedMode();
     process.exit(exitCode);
 }
 
@@ -245,9 +258,5 @@ if (command === "attach" || command === "attach-local") {
     }
 }
 
-if (!process.env.TELEGRAM_TOKEN) {
-    console.error("Missing TELEGRAM_TOKEN. Set it in environment or .env file.");
-    process.exit(1);
-}
-
-await import("../bot.js");
+const exitCode = await runManagedMode();
+process.exit(exitCode);

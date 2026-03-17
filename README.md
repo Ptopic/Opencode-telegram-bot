@@ -14,7 +14,11 @@ Run with npx from this folder:
 npx --yes .
 ```
 
-Run OpenCode server + Telegram bot together (recommended local dev):
+`npm run start`, `npx --yes .`, and `opencode-telegram` now start:
+- OpenCode server (`opencode-ai serve`) on `0.0.0.0:62771`
+- Telegram bot process using `OPENCODE_BASE_URL=http://127.0.0.1:62771` by default
+
+Run the same managed setup explicitly in dev mode:
 
 ```bash
 opencode-telegram dev
@@ -26,9 +30,7 @@ Or without global link:
 npx --yes . dev
 ```
 
-`opencode-telegram dev` starts:
-- OpenCode server (`opencode-ai serve`) on `0.0.0.0:62771`
-- Telegram bot process using `OPENCODE_BASE_URL=http://127.0.0.1:62771` by default
+`opencode-telegram dev` uses the same default server host and port.
 
 Optional dev env vars:
 - `OPENCODE_DEV_PORT` (default `62771`)
@@ -58,7 +60,7 @@ Required env var:
 Optional:
 
 - `OPENCODE_TELEGRAM_ENV_FILE` (custom env file path)
-- `OPENCODE_BASE_URL` (shared OpenCode server URL, default `http://127.0.0.1:4096`)
+- `OPENCODE_BASE_URL` (shared OpenCode server URL, default `http://127.0.0.1:62771` for the managed local server)
 - `OPENCODE_URL` (legacy alias for `OPENCODE_BASE_URL`)
 
 ## Docker fallback (optional)
@@ -69,5 +71,5 @@ From repository root:
 docker compose up --build
 ```
 
-The bot does not spawn `opencode serve`. Start OpenCode separately (for example with Docker) and point the bot to it using `OPENCODE_BASE_URL`.
+If you use Docker instead of the managed local startup, start OpenCode separately and point the bot to it using `OPENCODE_BASE_URL`.
 This repo's compose stack runs OpenCode on port `62771`.
