@@ -1,6 +1,8 @@
 import axios from "axios";
 import TelegramBot from "node-telegram-bot-api";
 import { readdir } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { networkInterfaces } from "node:os";
 
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
@@ -26,6 +28,25 @@ const TELEGRAM_SYNC_INCLUDE_THINKING = process.env.OPENCODE_TELEGRAM_SYNC_INCLUD
 const TELEGRAM_SYNC_INCLUDE_CODE_CHANGES = process.env.OPENCODE_TELEGRAM_SYNC_INCLUDE_CODE_CHANGES === "true";
 const TELEGRAM_SYNC_MIRROR_USER_MESSAGES = process.env.OPENCODE_TELEGRAM_SYNC_MIRROR_USER_MESSAGES !== "false";
 const TELEGRAM_SYNC_USER_PREFIX = process.env.OPENCODE_TELEGRAM_SYNC_USER_PREFIX || "👨‍💻";
+
+const DIFIT_ENABLED = process.env.OPENCODE_DIFIT_ENABLED !== "false";
+const DIFIT_PORT = Number(process.env.OPENCODE_DIFIT_PORT) || 4966;
+const DIFIT_BIND_HOST = "0.0.0.0";
+const DIFIT_TIMEOUT_MS = 10000;
+
+const difitProcessesByProject = new Map();
+
+function getLocalIpAddress() {
+    const nets = networkInterfaces();
+    for (const name of Object.keys(nets)) {
+        for (const net of nets[name]) {
+            if (net.family === "IPv4" && !net.internal) {
+                return net.address;
+            }
+        }
+    }
+    return "127.0.0.1";
+}
 
 const PROJECT_ROOTS = [
     { scope: "petar", path: "/Users/petartopic/Desktop/Petar", label: "Petar" },
@@ -1425,6 +1446,37 @@ async function getWorkspaceForChat(chatId) {
     return runtime;
 }
 
+const opencodeProjectByPath = new Map();
+
+async function getOpenCodeProject(workspace, directory) {
+    const cacheKey = `${workspace.baseUrl}::${directory}`;
+    const cached = opencodeProjectByPath.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < 60000) {
+        return cached.project;
+    }
+
+    try {
+        const res = await axios.get(`${workspace.baseUrl}/project/current`, {
+            params: { directory },
+            timeout: 10000,
+        });
+
+        const project = res?.data;
+        if (project && typeof project.id === "string") {
+            opencodeProjectByPath.set(cacheKey, { project, cachedAt: Date.now() });
+            return project;
+        }
+    } catch (err) {
+        console.warn("Failed to get OpenCode project for directory", {
+            directory,
+            message: err?.message,
+            status: err?.response?.status,
+        });
+    }
+
+    return null;
+}
+
 async function loadProjectDirectory(chatId) {
     const allItems = [];
 
@@ -1557,36 +1609,59 @@ async function getOrCreateSession(chatId, workspace, options = {}) {
         return null;
     }
 
-    const createRes = await axios.post(`${workspace.baseUrl}/session`, {
-        title: defaultSessionTitle(chatId, workspace.projectName),
-        directory: workspace.projectPath,
-        cwd: workspace.projectPath,
-    });
-
-    const sessionId = createRes?.data?.id;
-    if (!sessionId || typeof sessionId !== "string") {
-        throw new Error("Failed to create OpenCode session");
-    }
-
-    sessionProjectPathById.set(sessionId, workspace.projectPath);
-    sessionByChatProject.set(sessionKey, sessionId);
-    await loadSessionDirectory(chatId, workspace);
+    const sessionId = await createSessionWithProject(chatId, workspace, defaultSessionTitle(chatId, workspace.projectName));
     return sessionId;
 }
 
 async function createNewSession(chatId, workspace, title) {
-    const createRes = await axios.post(`${workspace.baseUrl}/session`, {
-        title: title && title.trim() !== "" ? title.trim() : defaultSessionTitle(chatId, workspace.projectName),
-        directory: workspace.projectPath,
-        cwd: workspace.projectPath,
-    });
+    const sessionTitle = title && title.trim() !== "" ? title.trim() : defaultSessionTitle(chatId, workspace.projectName);
+    const sessionId = await createSessionWithProject(chatId, workspace, sessionTitle);
+    return sessionId;
+}
 
-    const sessionId = createRes?.data?.id;
+async function createSessionWithProject(chatId, workspace, title) {
+    const project = await getOpenCodeProject(workspace, workspace.projectPath);
+    const sessionKey = getChatProjectKey(chatId, workspace.projectPath);
+    let sessionId = null;
+
+    if (project && project.id) {
+        try {
+            const createRes = await axios.post(`${workspace.baseUrl}/project/${project.id}/session`, {
+                title,
+                directory: workspace.projectPath,
+            }, { timeout: 15000 });
+
+            sessionId = createRes?.data?.id;
+            if (sessionId && typeof sessionId === "string") {
+                console.log("Created session via project-scoped endpoint", {
+                    projectId: project.id,
+                    sessionId,
+                    directory: workspace.projectPath,
+                });
+            }
+        } catch (err) {
+            console.warn("Failed to create session via project-scoped endpoint, falling back", {
+                projectId: project.id,
+                message: err?.message,
+                status: err?.response?.status,
+            });
+        }
+    }
+
+    if (!sessionId) {
+        const createRes = await axios.post(`${workspace.baseUrl}/session`, {
+            title,
+            directory: workspace.projectPath,
+            cwd: workspace.projectPath,
+        });
+
+        sessionId = createRes?.data?.id;
+    }
+
     if (!sessionId || typeof sessionId !== "string") {
         throw new Error("Failed to create OpenCode session");
     }
 
-    const sessionKey = getChatProjectKey(chatId, workspace.projectPath);
     sessionProjectPathById.set(sessionId, workspace.projectPath);
     sessionByChatProject.set(sessionKey, sessionId);
     await loadSessionDirectory(chatId, workspace);
@@ -1971,6 +2046,81 @@ async function loadSelectableModes(workspace) {
     }
 }
 
+async function startDifitForProject(projectPath) {
+    if (!DIFIT_ENABLED) {
+        return null;
+    }
+
+    const existingProcess = difitProcessesByProject.get(projectPath);
+    if (existingProcess) {
+        try {
+            existingProcess.kill();
+        } catch {}
+        difitProcessesByProject.delete(projectPath);
+    }
+
+    return new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+            console.warn("difit startup timed out", { projectPath });
+            resolve(null);
+        }, DIFIT_TIMEOUT_MS);
+
+        try {
+            const difit = spawn("npx", ["difit", ".", "--host", DIFIT_BIND_HOST, "--port", String(DIFIT_PORT), "--no-open", "--keep-alive"], {
+                cwd: projectPath,
+                shell: true,
+            });
+
+            let started = false;
+            let stderr = "";
+
+            difit.stdout.on("data", (data) => {
+                const output = data.toString();
+                if (output.includes("server") && output.includes(String(DIFIT_PORT)) && !started) {
+                    started = true;
+                    clearTimeout(timeout);
+                    difitProcessesByProject.set(projectPath, difit);
+                    const localIp = getLocalIpAddress();
+                    resolve(`http://${localIp}:${DIFIT_PORT}`);
+                }
+            });
+
+            difit.stderr.on("data", (data) => {
+                stderr += data.toString();
+            });
+
+            difit.on("error", (err) => {
+                clearTimeout(timeout);
+                console.error("Failed to start difit", { projectPath, error: err.message });
+                resolve(null);
+            });
+
+            difit.on("close", (code) => {
+                clearTimeout(timeout);
+                if (!started) {
+                    console.warn("difit exited before startup was detected", { projectPath, code, stderr });
+                    resolve(null);
+                }
+            });
+        } catch (err) {
+            clearTimeout(timeout);
+            console.error("Failed to spawn difit", { projectPath, error: err.message });
+            resolve(null);
+        }
+    });
+}
+
+async function sendReplyWithDifit(chatId, reply, workspace) {
+    await sendTrackedMessage(chatId, formatAssistantReplyForTelegram(reply));
+
+    if (workspace?.projectPath) {
+        const difitUrl = await startDifitForProject(workspace.projectPath);
+        if (difitUrl) {
+            await sendTrackedMessage(chatId, `📊 View changes: ${difitUrl}`);
+        }
+    }
+}
+
 bot.on("message", async (msg) => {
     const chatId = msg.chat.id;
     trackMessageId(chatId, msg.message_id);
@@ -2229,7 +2379,7 @@ bot.on("message", async (msg) => {
                 workspace = interaction.workspace;
                 res = interaction.response;
                 if (interaction.reply) {
-                    await sendTrackedMessage(chatId, formatAssistantReplyForTelegram(interaction.reply));
+                    await sendReplyWithDifit(chatId, interaction.reply, workspace);
                     await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
                     return;
                 }
@@ -2246,7 +2396,7 @@ bot.on("message", async (msg) => {
                 workspace = interaction.workspace;
                 res = interaction.response;
                 if (interaction.reply) {
-                    await sendTrackedMessage(chatId, formatAssistantReplyForTelegram(interaction.reply));
+                    await sendReplyWithDifit(chatId, interaction.reply, workspace);
                     await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
                     return;
                 }
@@ -2260,7 +2410,7 @@ bot.on("message", async (msg) => {
             workspace = interaction.workspace;
             res = interaction.response;
             if (interaction.reply) {
-                await sendTrackedMessage(chatId, formatAssistantReplyForTelegram(interaction.reply));
+                await sendReplyWithDifit(chatId, interaction.reply, workspace);
                 await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
                 return;
             }
@@ -2287,7 +2437,7 @@ bot.on("message", async (msg) => {
             reply = "✅ Request processed (no text response)";
         }
 
-        await sendTrackedMessage(chatId, formatAssistantReplyForTelegram(reply));
+        await sendReplyWithDifit(chatId, reply, workspace);
         const sessionId = sessionByChatProject.get(getChatProjectKey(chatId, workspace.projectPath));
         if (sessionId) {
             await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
