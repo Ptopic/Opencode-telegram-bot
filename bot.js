@@ -1,8 +1,11 @@
 import axios from "axios";
 import TelegramBot from "node-telegram-bot-api";
 import { readdir } from "node:fs/promises";
+import { writeFileSync, readFileSync, unlinkSync, existsSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { networkInterfaces } from "node:os";
+import { networkInterfaces, homedir } from "node:os";
+import { createConnection } from "node:net";
+import path from "node:path";
 
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
@@ -34,7 +37,394 @@ const DIFIT_PORT = Number(process.env.OPENCODE_DIFIT_PORT) || 4966;
 const DIFIT_BIND_HOST = "0.0.0.0";
 const DIFIT_TIMEOUT_MS = 10000;
 
+const INSTANCE_PORT_START = Number(process.env.OPENCODE_INSTANCE_PORT_START) || 50000;
+const INSTANCE_PORT_END = Number(process.env.OPENCODE_INSTANCE_PORT_END) || 59999;
+const INSTANCE_STARTUP_TIMEOUT_MS = Number(process.env.OPENCODE_INSTANCE_STARTUP_TIMEOUT_MS) || 30000;
+const INSTANCE_HEALTH_CHECK_MS = 500;
+const INSTANCES_STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
+
 const difitProcessesByProject = new Map();
+
+class ProjectInstanceManager {
+    constructor() {
+        this.instances = new Map();
+        this.nextPort = INSTANCE_PORT_START;
+    }
+
+    saveState() {
+        const state = { instances: {} };
+        for (const [projectPath, instance] of this.instances) {
+            state.instances[projectPath] = {
+                port: instance.port,
+                baseUrl: instance.baseUrl,
+                status: instance.status,
+                pid: instance.pid,
+                startedAt: instance.startedAt,
+            };
+        }
+        try {
+            writeFileSync(INSTANCES_STATE_FILE, JSON.stringify(state, null, 2));
+        } catch (err) {
+            console.warn("Failed to save instance state:", err?.message);
+        }
+    }
+
+    clearState() {
+        try {
+            if (existsSync(INSTANCES_STATE_FILE)) {
+                unlinkSync(INSTANCES_STATE_FILE);
+            }
+        } catch (err) {
+            console.warn("Failed to clear instance state:", err?.message);
+        }
+    }
+
+    async allocatePort() {
+        const startPort = this.nextPort;
+        
+        for (let i = 0; i < INSTANCE_PORT_END - INSTANCE_PORT_START; i++) {
+            const port = this.nextPort;
+            this.nextPort = this.nextPort >= INSTANCE_PORT_END ? INSTANCE_PORT_START : this.nextPort + 1;
+            
+            const inUse = await this.isPortInUse(port);
+            if (!inUse) {
+                return port;
+            }
+        }
+
+        throw new Error("No available ports in range");
+    }
+
+    async waitForPort(port, timeoutMs = 5000) {
+        return new Promise((resolve, reject) => {
+            const deadline = Date.now() + timeoutMs;
+            let settled = false;
+            let retryTimer = null;
+
+            const cleanup = () => {
+                settled = true;
+                if (retryTimer) {
+                    clearTimeout(retryTimer);
+                    retryTimer = null;
+                }
+            };
+
+            const tryConnect = () => {
+                if (settled) return;
+
+                const socket = createConnection({ port, host: "127.0.0.1" }, () => {
+                    cleanup();
+                    socket.end();
+                    resolve();
+                });
+
+                socket.once("error", () => {
+                    socket.destroy();
+                    if (settled) return;
+
+                    if (Date.now() >= deadline) {
+                        cleanup();
+                        reject(new Error(`Port ${port} did not become available within ${timeoutMs}ms`));
+                    } else {
+                        retryTimer = setTimeout(() => {
+                            retryTimer = null;
+                            tryConnect();
+                        }, 100);
+                    }
+                });
+            };
+
+            tryConnect();
+        });
+    }
+
+    async probeHealth(baseUrl, timeoutMs = 5000) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+            const response = await fetch(`${baseUrl}/global/health`, {
+                signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+
+            if (!response.ok) {
+                return { ok: false, reason: `HTTP ${response.status}` };
+            }
+
+            const payload = await response.json().catch(() => null);
+            const healthy = payload?.healthy === true;
+            const version = typeof payload?.version === "string" ? payload.version : undefined;
+
+            if (!healthy) {
+                return { ok: false, reason: "Instance reported unhealthy" };
+            }
+
+            return { ok: true, version };
+        } catch (err) {
+            clearTimeout(timeoutId);
+            return { ok: false, reason: err?.message || "Connection failed" };
+        }
+    }
+
+    async isPortInUse(port) {
+        return new Promise((resolve) => {
+            const socket = createConnection({ port, host: "127.0.0.1" }, () => {
+                socket.end();
+                resolve(true);
+            });
+            socket.once("error", () => {
+                socket.destroy();
+                resolve(false);
+            });
+        });
+    }
+
+    loadState() {
+        try {
+            if (existsSync(INSTANCES_STATE_FILE)) {
+                const content = readFileSync(INSTANCES_STATE_FILE, "utf8");
+                const data = JSON.parse(content);
+                for (const [path, instance] of Object.entries(data.instances || {})) {
+                    if (!this.instances.has(path)) {
+                        this.instances.set(path, instance);
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn("Failed to load instance state:", err?.message);
+        }
+    }
+
+    async launch(projectPath) {
+        this.loadState();
+
+        const existing = this.instances.get(projectPath);
+        if (existing && existing.status === "ready") {
+            const inUse = await this.isPortInUse(existing.port);
+            if (inUse) {
+                const result = await this.probeHealth(existing.baseUrl, 2000);
+                if (result.ok) {
+                    existing.lastUsedAt = Date.now();
+                    return existing;
+                }
+            }
+        }
+
+        if (existing && existing.status === "starting") {
+            while (existing.status === "starting") {
+                await new Promise((r) => setTimeout(r, 100));
+            }
+            return this.instances.get(projectPath);
+        }
+
+        for (const [path, instance] of this.instances) {
+            if (instance.status === "ready" && instance.baseUrl) {
+                const result = await this.probeHealth(instance.baseUrl, 1000);
+                if (result.ok) {
+                    const normalizedPath = projectPath.replace(/\/+$/, "").toLowerCase();
+                    const normalizedInstance = path.replace(/\/+$/, "").toLowerCase();
+                    if (normalizedPath === normalizedInstance || normalizedPath.startsWith(normalizedInstance + "/")) {
+                        instance.lastUsedAt = Date.now();
+                        return instance;
+                    }
+                }
+            }
+        }
+
+        const port = await this.allocatePort();
+        const baseUrl = `http://127.0.0.1:${port}`;
+
+        const instance = {
+            projectPath,
+            port,
+            baseUrl,
+            status: "starting",
+            pid: null,
+            process: null,
+            lastUsedAt: Date.now(),
+            startedAt: Date.now(),
+        };
+
+        this.instances.set(projectPath, instance);
+
+        return new Promise((resolve, reject) => {
+            let stdoutBuffer = "";
+            let stderrBuffer = "";
+            let portFound = false;
+            let healthCheckInterval = null;
+            let startupTimeout = null;
+
+            const cleanup = () => {
+                if (healthCheckInterval) {
+                    clearInterval(healthCheckInterval);
+                    healthCheckInterval = null;
+                }
+                if (startupTimeout) {
+                    clearTimeout(startupTimeout);
+                    startupTimeout = null;
+                }
+            };
+
+            const onExit = (code, signal) => {
+                cleanup();
+                instance.status = "stopped";
+                instance.pid = null;
+                instance.process = null;
+
+                if (!portFound) {
+                    const output = (stdoutBuffer + "\n" + stderrBuffer).trim();
+                    reject(new Error(`OpenCode process exited before startup: code=${code}, signal=${signal}\n${output}`));
+                }
+            };
+
+            const onError = (err) => {
+                cleanup();
+                instance.status = "error";
+                reject(err);
+            };
+
+            startupTimeout = setTimeout(() => {
+                if (!portFound) {
+                    cleanup();
+                    instance.status = "error";
+                    instance.process?.kill("SIGKILL");
+                    reject(new Error(`OpenCode instance startup timeout after ${INSTANCE_STARTUP_TIMEOUT_MS}ms`));
+                }
+            }, INSTANCE_STARTUP_TIMEOUT_MS);
+
+            const child = spawn("opencode", ["serve", "--port", String(port), "--print-logs"], {
+                cwd: projectPath,
+                env: { ...process.env },
+                stdio: ["ignore", "pipe", "pipe"],
+                detached: process.platform !== "win32",
+            });
+
+            instance.process = child;
+            instance.pid = child.pid;
+
+            child.on("error", onError);
+            child.on("exit", onExit);
+
+            child.stdout?.on("data", (data) => {
+                stdoutBuffer += data.toString();
+                const lines = stdoutBuffer.split("\n");
+                stdoutBuffer = lines.pop() ?? "";
+
+                for (const line of lines) {
+                    if (!portFound && /opencode server listening on/i.test(line)) {
+                        portFound = true;
+                    }
+                }
+            });
+
+            child.stderr?.on("data", (data) => {
+                stderrBuffer += data.toString();
+            });
+
+            healthCheckInterval = setInterval(async () => {
+                if (!portFound) return;
+
+                try {
+                    await this.waitForPort(port, 1000);
+                    const result = await this.probeHealth(baseUrl, 2000);
+
+                    if (result.ok) {
+                        cleanup();
+                        instance.status = "ready";
+                        instance.version = result.version;
+                        this.saveState();
+                        console.log(`Instance ready: ${projectPath} -> ${baseUrl}`);
+                        resolve(instance);
+                    }
+                } catch {
+                }
+            }, INSTANCE_HEALTH_CHECK_MS);
+        });
+    }
+
+    get(projectPath) {
+        return this.instances.get(projectPath);
+    }
+
+    async stop(projectPath) {
+        const instance = this.instances.get(projectPath);
+        if (!instance || !instance.process) return;
+
+        const child = instance.process;
+        const pid = instance.pid;
+
+        instance.status = "stopping";
+
+        return new Promise((resolve) => {
+            const cleanup = () => {
+                instance.status = "stopped";
+                instance.pid = null;
+                instance.process = null;
+                this.instances.delete(projectPath);
+                this.saveState();
+                resolve();
+            };
+
+            const alreadyExited = () => child.exitCode !== null || child.signalCode !== null;
+
+            if (alreadyExited()) {
+                cleanup();
+                return;
+            }
+
+            child.once("exit", cleanup);
+            child.once("error", cleanup);
+
+            try {
+                if (process.platform === "win32") {
+                    spawn("taskkill", ["/pid", String(pid), "/f", "/t"]);
+                } else {
+                    process.kill(-pid, "SIGTERM");
+
+                    setTimeout(() => {
+                        if (!alreadyExited()) {
+                            try {
+                                process.kill(-pid, "SIGKILL");
+                            } catch {}
+                        }
+                    }, 2000);
+                }
+            } catch {
+                cleanup();
+            }
+        });
+    }
+
+    async shutdown() {
+        const stops = [];
+        for (const [projectPath] of this.instances) {
+            stops.push(this.stop(projectPath));
+        }
+        await Promise.allSettled(stops);
+        this.clearState();
+    }
+
+    findByDirectory(directory) {
+        const normalizedDir = directory.replace(/\/+$/, "").toLowerCase();
+
+        for (const [projectPath, instance] of this.instances) {
+            const normalizedProject = projectPath.replace(/\/+$/, "").toLowerCase();
+
+            if (normalizedProject === normalizedDir || normalizedDir.startsWith(normalizedProject + "/")) {
+                return instance;
+            }
+        }
+
+        return null;
+    }
+
+    list() {
+        return Array.from(this.instances.values());
+    }
+}
+
+const projectInstanceManager = new ProjectInstanceManager();
 
 function getLocalIpAddress() {
     const nets = networkInterfaces();
@@ -1335,9 +1725,11 @@ async function restartWorkspaceRuntime(projectPath, reason) {
 }
 
 async function stopWorkspaceRuntime(projectPath, options = {}) {
+    await projectInstanceManager.stop(projectPath);
+
     const runtime = ensureWorkspaceRecord(projectPath);
-    runtime.status = "ready";
-    runtime.baseUrl = OPENCODE_BASE_URL;
+    runtime.status = "stopped";
+    runtime.baseUrl = null;
     runtime.lastUsedAt = Date.now();
 
     if (options.clearCaches) {
@@ -1350,8 +1742,14 @@ async function stopWorkspaceRuntime(projectPath, options = {}) {
 }
 
 async function stopAllWorkspaceRuntimesExcept(projectPath, reason) {
-    void projectPath;
-    void reason;
+    const stops = [];
+    for (const [path, instance] of projectInstanceManager.instances) {
+        if (path !== projectPath) {
+            console.log(`Stopping instance for ${path} (${reason})`);
+            stops.push(stopWorkspaceRuntime(path, { clearCaches: true }));
+        }
+    }
+    await Promise.allSettled(stops);
 }
 
 async function postWorkspaceInteraction(workspace, sessionId, endpoint, payload) {
@@ -1385,8 +1783,8 @@ function ensureWorkspaceRecord(projectPath) {
         projectPath,
         projectName: project.name,
         projectLabel: project.label,
-        status: "ready",
-        baseUrl: OPENCODE_BASE_URL,
+        status: "pending",
+        baseUrl: null,
         lastUsedAt: Date.now(),
     };
     workspaceRuntimeByProjectPath.set(projectPath, runtime);
@@ -1415,20 +1813,17 @@ async function waitForWorkspaceHealthy(baseUrl, timeoutMs) {
 }
 
 async function ensureWorkspaceRuntime(projectPath) {
+    const instance = await projectInstanceManager.launch(projectPath);
+
     const runtime = ensureWorkspaceRecord(projectPath);
+    runtime.baseUrl = instance.baseUrl;
+    runtime.status = instance.status;
     runtime.lastUsedAt = Date.now();
 
-    if (!runtime.baseUrl) {
-        runtime.baseUrl = OPENCODE_BASE_URL;
+    if (instance.version) {
+        runtime.version = instance.version;
     }
 
-    if (runtime.status === "ready") {
-        return runtime;
-    }
-
-    await waitForWorkspaceHealthy(runtime.baseUrl, WORKSPACE_HEALTH_TIMEOUT_MS);
-    runtime.status = "ready";
-    runtime.lastUsedAt = Date.now();
     return runtime;
 }
 
@@ -1740,6 +2135,9 @@ async function switchSessionBySelector(chatId, workspace, wanted) {
 
     await axios.get(`${workspace.baseUrl}/session/${targetSessionId}`);
     sessionByChatProject.set(getChatProjectKey(chatId, workspace.projectPath), targetSessionId);
+
+    await tuiSelectSession(workspace, targetSessionId);
+
     return {
         ok: true,
         message: `Switched to session: ${describeSession(directory, targetSessionId)}`,
@@ -1844,6 +2242,25 @@ async function syncTelegramCommands() {
     console.log(`Synced ${mergedCommands.length} Telegram commands`);
 }
 
+async function tuiSelectSession(workspace, sessionId) {
+    try {
+        await axios.post(`${workspace.baseUrl}/tui/select-session`, {
+            sessionID: sessionId,
+        }, {
+            timeout: 10000,
+        });
+        return true;
+    } catch (err) {
+        console.warn("Failed to select session in TUI", {
+            sessionId,
+            baseUrl: workspace.baseUrl,
+            status: err?.response?.status,
+            message: err?.message,
+        });
+        return false;
+    }
+}
+
 async function switchProjectBySlug(chatId, slug) {
     let directory = projectDirectoryByChat.get(chatId);
     if (!directory) {
@@ -1863,6 +2280,10 @@ async function switchProjectBySlug(chatId, slug) {
     const runtime = await ensureWorkspaceRuntime(project.path);
     activeProjectPathByChat.set(chatId, project.path);
     const sessionId = await createNewSession(chatId, runtime);
+
+    // Switch the TUI to display the new session
+    await tuiSelectSession(runtime, sessionId);
+
     await syncTelegramCommands();
     await syncTelegramChatFromSession(chatId, runtime, sessionId, { clearChat: true });
 
@@ -2222,6 +2643,7 @@ bot.on("message", async (msg) => {
             if (telegramCommand === "new") {
                 const wantedTitle = trimmed.slice(firstToken.length).trim();
                 const newSessionId = await createNewSession(chatId, workspace, wantedTitle);
+                await tuiSelectSession(workspace, newSessionId);
                 await clearTrackedMessages(chatId);
                 const directory = sessionDirectoryByChatProject.get(getChatProjectKey(chatId, workspace.projectPath));
                 await sendTrackedMessage(chatId, `Started new session: ${describeSession(directory, newSessionId)}`);
@@ -2557,3 +2979,24 @@ setInterval(() => {
         console.error("Live Telegram sync failed", err?.message ?? err);
     });
 }, TELEGRAM_LIVE_SYNC_INTERVAL_MS);
+
+let isShuttingDown = false;
+
+async function gracefulShutdown(signal) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    console.log(`Received ${signal}, shutting down gracefully...`);
+
+    try {
+        await projectInstanceManager.shutdown();
+        console.log("All OpenCode instances stopped");
+    } catch (err) {
+        console.error("Error during shutdown:", err?.message);
+    }
+
+    process.exit(0);
+}
+
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
