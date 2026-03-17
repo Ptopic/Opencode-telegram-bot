@@ -8,6 +8,7 @@
 	"scripts": {
 		"dev": "node ./bin/opencode-telegram.js dev",
 		"attach": "node ./bin/opencode-telegram.js attach",
+		"kill-all": "node ./bin/opencode-telegram.js kill-all",
 		"start": "node ./bin/opencode-telegram.js",
 		"start:watch": "nodemon --watch bot.js --watch bin/opencode-telegram.js --exec \"node ./bin/opencode-telegram.js\""
 	},

@@ -513,6 +513,32 @@ async function runAttachMode(rawBaseUrl) {
     return 1;
 }
 
+async function runKillAll() {
+    console.log("Killing all OpenCode server instances...");
+
+    const result = spawn("pkill", ["-f", "opencode serve"], {
+        stdio: "inherit",
+        shell: process.platform === "win32",
+    });
+
+    await new Promise((resolve) => {
+        result.on("close", resolve);
+        result.on("error", resolve);
+    });
+
+    try {
+        if (existsSync(INSTANCES_STATE_FILE)) {
+            unlinkSync(INSTANCES_STATE_FILE);
+            console.log("Removed instance state file.");
+        }
+    } catch (err) {
+        console.warn("Failed to remove state file:", err?.message);
+    }
+
+    console.log("Done. All OpenCode server instances have been terminated.");
+    return 0;
+}
+
 const command = process.argv[2];
 
 if (command === "dev" || !command) {
@@ -535,6 +561,11 @@ if (command === "attach" || command === "attach-local") {
         console.error(`Attach failed: ${err?.message ?? "unknown error"}`);
         process.exit(1);
     }
+}
+
+if (command === "kill-all") {
+    const exitCode = await runKillAll();
+    process.exit(exitCode);
 }
 
 const exitCode = await runManagedMode();
