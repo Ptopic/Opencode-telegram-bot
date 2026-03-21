@@ -468,10 +468,45 @@ function getLocalIpAddress() {
     return "127.0.0.1";
 }
 
-const PROJECT_ROOTS = [
-    { scope: "petar", path: "/Users/petartopic/Desktop/Petar", label: "Petar" },
-    { scope: "profico", path: "/Users/petartopic/Desktop/Profico", label: "Profico" },
-];
+function sanitizeRootScope(value) {
+    return String(value || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "project";
+}
+
+function parseProjectRootsFromEnv(raw) {
+    if (typeof raw !== "string" || raw.trim() === "") return [];
+
+    return raw
+        .split(";")
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+        .map((entry, index) => {
+            const [labelPart, pathPart] = entry.includes("=")
+                ? entry.split(/=(.+)/)
+                : ["", entry];
+            const normalizedPath = (pathPart || "").trim().replace(/\/+$/, "");
+            if (!normalizedPath) return null;
+
+            const label = (labelPart || "").trim() || path.basename(normalizedPath) || `Root ${index + 1}`;
+            const scope = sanitizeRootScope(label);
+            return {
+                scope,
+                path: normalizedPath,
+                label,
+            };
+        })
+        .filter(Boolean);
+}
+
+const PROJECT_ROOTS = parseProjectRootsFromEnv(process.env.OPENCODE_PROJECT_ROOTS);
+if (PROJECT_ROOTS.length === 0) {
+    PROJECT_ROOTS.push(
+        { scope: "petar", path: "/Users/petartopic/Desktop/Petar", label: "Petar" },
+        { scope: "profico", path: "/Users/petartopic/Desktop/Profico", label: "Profico" },
+    );
+}
 
 const BUILTIN_TELEGRAM_COMMANDS = [
     { command: "session", description: "Show current OpenCode session" },
@@ -485,6 +520,7 @@ const BUILTIN_TELEGRAM_COMMANDS = [
     { command: "mode", description: "Set OpenCode mode (agent)" },
     { command: "stop", description: "Stop current OpenCode session execution" },
     { command: "commandsync", description: "Refresh Telegram commands" },
+    { command: "debug_runtime", description: "Show runtime and sync diagnostics" },
     { command: "help", description: "Show available commands" },
 ];
 
@@ -2468,6 +2504,42 @@ function getActiveProjectDescription(chatId) {
     if (!projectPath) return null;
     const project = parseProjectFromPath(projectPath);
     return `${project.label}/${project.name}`;
+}
+
+
+function formatRuntimeDebug(chatId, workspace) {
+    const projectPath = workspace?.projectPath;
+    const chatProjectKey = projectPath ? getChatProjectKey(chatId, projectPath) : null;
+    const runtime = projectPath ? workspaceRuntimeByProjectPath.get(projectPath) : null;
+    const instance = projectPath ? projectInstanceManager.get(projectPath) : null;
+    const tracked = trackedMessageIdsByChat.get(chatId)?.length ?? 0;
+    const seenKeys = chatProjectKey ? (seenSessionMessageKeysByChatProject.get(chatProjectKey)?.length ?? 0) : 0;
+    const sessionId = chatProjectKey ? sessionByChatProject.get(chatProjectKey) : null;
+    const mode = workspace ? getSelectedMode(chatId, workspace) : null;
+
+    const lines = [
+        "Debug runtime",
+        `chatId: ${chatId}`,
+        `projectPath: ${projectPath ?? "(none)"}`,
+        `workspaceStatus: ${runtime?.status ?? workspace?.status ?? "unknown"}`,
+        `baseUrl: ${runtime?.baseUrl ?? workspace?.baseUrl ?? "(none)"}`,
+        `sessionId: ${sessionId ?? "(none)"}`,
+        `mode: ${mode ?? "default"}`,
+        `liveSyncGlobalLock: ${liveSyncInFlight ? "on" : "off"}`,
+        `liveSyncChatLock: ${chatProjectKey && liveSyncInFlightByChatProject.has(chatProjectKey) ? "on" : "off"}`,
+        `trackedMessageIds: ${tracked}`,
+        `seenSessionKeys: ${seenKeys}`,
+    ];
+
+    if (instance) {
+        lines.push(`instanceStatus: ${instance.status ?? "unknown"}`);
+        lines.push(`instancePort: ${instance.port ?? "n/a"}`);
+        lines.push(`instancePid: ${instance.pid ?? "n/a"}`);
+    } else {
+        lines.push("instanceStatus: (no in-memory instance)");
+    }
+
+    return ["```text", ...lines, "```"].join("\n");
 }
 
 function getSelectedMode(chatId, workspace) {
