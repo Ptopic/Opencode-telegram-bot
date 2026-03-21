@@ -42,6 +42,7 @@ const INSTANCE_PORT_END = Number(process.env.OPENCODE_INSTANCE_PORT_END) || 5999
 const INSTANCE_STARTUP_TIMEOUT_MS = Number(process.env.OPENCODE_INSTANCE_STARTUP_TIMEOUT_MS) || 30000;
 const INSTANCE_HEALTH_CHECK_MS = 500;
 const INSTANCES_STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
+const INSTANCE_STARTING_STALE_TIMEOUT_MS = Number(process.env.OPENCODE_INSTANCE_STARTING_STALE_TIMEOUT_MS) || 20000;
 
 const difitProcessesByProject = new Map();
 
@@ -212,10 +213,39 @@ class ProjectInstanceManager {
         }
 
         if (existing && existing.status === "starting") {
+            const waitDeadline = Date.now() + INSTANCE_STARTING_STALE_TIMEOUT_MS;
+
             while (existing.status === "starting") {
+                const pidAlive = typeof existing.pid === "number" ? await this.isPortInUse(existing.port) : false;
+                const hasProcessHandle = !!existing.process;
+
+                if (!hasProcessHandle && !pidAlive) {
+                    console.warn("Detected stale starting instance, resetting", {
+                        projectPath,
+                        port: existing.port,
+                        pid: existing.pid,
+                    });
+                    this.instances.delete(projectPath);
+                    break;
+                }
+
+                if (Date.now() >= waitDeadline) {
+                    console.warn("Starting instance wait timeout, resetting", {
+                        projectPath,
+                        port: existing.port,
+                        pid: existing.pid,
+                    });
+                    this.instances.delete(projectPath);
+                    break;
+                }
+
                 await new Promise((r) => setTimeout(r, 100));
             }
-            return this.instances.get(projectPath);
+
+            const afterWait = this.instances.get(projectPath);
+            if (afterWait && afterWait.status !== "starting") {
+                return afterWait;
+            }
         }
 
         for (const [path, instance] of this.instances) {
@@ -480,6 +510,7 @@ const seenSessionMessageKeysByChatProject = new Map();
 const selectedModeByChatProject = new Map();
 
 let liveSyncInFlight = false;
+const liveSyncInFlightByChatProject = new Set();
 
 function trackMessageId(chatId, messageId) {
     if (typeof messageId !== "number") return;
@@ -1539,7 +1570,6 @@ async function syncTelegramChatFromSession(chatId, workspace, sessionId, options
     sessionByChatProject.set(chatProjectKey, sessionId);
 
     const rawMessages = await fetchSessionMessages(workspace, sessionId);
-    rememberSessionMessageKeys(chatProjectKey, rawMessages);
     const syncMessages = rawMessages
         .filter((message) => shouldSyncMessageToTelegram(message))
         .map((message) => formatSessionMessageForTelegram(message))
@@ -1562,6 +1592,7 @@ async function syncTelegramChatFromSession(chatId, workspace, sessionId, options
             chatId,
             "Session has no assistant responses yet.",
         );
+        rememberSessionMessageKeys(chatProjectKey, rawMessages);
         return;
     }
 
@@ -1575,6 +1606,8 @@ async function syncTelegramChatFromSession(chatId, workspace, sessionId, options
             await sendTrackedMessage(chatId, chunk);
         }
     }
+
+    rememberSessionMessageKeys(chatProjectKey, rawMessages);
 }
 
 async function waitForSessionIdle(workspace, sessionId, timeoutMs = EVENT_STREAM_TIMEOUT_MS) {
@@ -2362,6 +2395,7 @@ async function liveSyncTelegramChatsFromSessions() {
     try {
         for (const [chatProjectKey, sessionId] of sessionByChatProject.entries()) {
             if (typeof sessionId !== "string" || sessionId.trim() === "") continue;
+            if (liveSyncInFlightByChatProject.has(chatProjectKey)) continue;
 
             const parsed = parseChatProjectKey(chatProjectKey);
             if (!parsed) continue;
@@ -2369,10 +2403,14 @@ async function liveSyncTelegramChatsFromSessions() {
             const { chatId, projectPath } = parsed;
             if (activeProjectPathByChat.get(chatId) !== projectPath) continue;
 
-            const runtime = workspaceRuntimeByProjectPath.get(projectPath);
-            if (!runtime || !runtime.baseUrl || runtime.status !== "ready") continue;
+            liveSyncInFlightByChatProject.add(chatProjectKey);
 
             try {
+                const runtime = await ensureWorkspaceRuntime(projectPath);
+                if (!runtime || !runtime.baseUrl || runtime.status !== "ready") {
+                    continue;
+                }
+
                 const rawMessages = await fetchSessionMessages(runtime, sessionId);
                 if (rawMessages.length === 0) continue;
 
@@ -2410,6 +2448,8 @@ async function liveSyncTelegramChatsFromSessions() {
                     status: err?.response?.status,
                     message: err?.message,
                 });
+            } finally {
+                liveSyncInFlightByChatProject.delete(chatProjectKey);
             }
         }
     } finally {
@@ -2549,15 +2589,17 @@ async function startDifitForProject(projectPath) {
         return null;
     }
 
-    const existingProcess = difitProcessesByProject.get(projectPath);
-    if (existingProcess) {
+    const existing = difitProcessesByProject.get(projectPath);
+    if (existing?.process && existing.process.exitCode === null && existing.process.signalCode === null && existing.url) {
+        return existing.url;
+    }
+
+    if (existing?.process) {
         try {
-            existingProcess.kill("SIGKILL");
+            existing.process.kill("SIGKILL");
         } catch {}
         difitProcessesByProject.delete(projectPath);
     }
-
-    await killProcessByPort(DIFIT_PORT);
 
     return new Promise((resolve) => {
         let started = false;
@@ -2571,19 +2613,20 @@ async function startDifitForProject(projectPath) {
         try {
             const difit = spawn("npx", ["difit", ".", "--host", DIFIT_BIND_HOST, "--port", String(DIFIT_PORT), "--no-open", "--keep-alive", "--include-untracked"], {
                 cwd: projectPath,
-                shell: true,
+                shell: false,
             });
 
             const checkForPort = (output) => {
                 console.log("difit output", { projectPath, output: output.slice(0, 200) });
-                const portMatch = output.match(/http:\/\/localhost:(\d+)/);
-                if (portMatch && !started) {
+                const urlMatch = output.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[a-zA-Z0-9.-]+):(\d+)/);
+                if (urlMatch && !started) {
                     started = true;
                     clearTimeout(timeout);
-                    difitProcessesByProject.set(projectPath, difit);
                     const localIp = getLocalIpAddress();
-                    const actualPort = portMatch[1];
-                    resolve(`http://${localIp}:${actualPort}`);
+                    const actualPort = urlMatch[1];
+                    const url = `http://${localIp}:${actualPort}`;
+                    difitProcessesByProject.set(projectPath, { process: difit, url, port: Number(actualPort), startedAt: Date.now() });
+                    resolve(url);
                 }
             };
 
