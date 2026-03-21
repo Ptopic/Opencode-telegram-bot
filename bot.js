@@ -2,7 +2,7 @@ import axios from "axios";
 import TelegramBot from "node-telegram-bot-api";
 import { readdir } from "node:fs/promises";
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { networkInterfaces, homedir } from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
@@ -17,9 +17,9 @@ const WORKSPACE_HEALTH_TIMEOUT_MS = 20000;
 const WORKSPACE_HEALTH_POLL_MS = 400;
 const OPENCODE_BASE_URL = (process.env.OPENCODE_BASE_URL || process.env.OPENCODE_URL || "http://127.0.0.1:4096").replace(/\/+$/, "");
 const PROJECT_BUTTON_LIMIT = 80;
-const INTERACTION_REQUEST_TIMEOUT_MS = Number(process.env.OPENCODE_INTERACTION_TIMEOUT_MS) || 45000;
+const INTERACTION_REQUEST_TIMEOUT_MS = Number(process.env.OPENCODE_INTERACTION_TIMEOUT_MS) || 120000;
 const INTERACTION_RETRY_LIMIT = 1;
-const EVENT_STREAM_TIMEOUT_MS = Number(process.env.OPENCODE_EVENT_STREAM_TIMEOUT_MS) || 240000;
+const EVENT_STREAM_TIMEOUT_MS = Number(process.env.OPENCODE_EVENT_STREAM_TIMEOUT_MS) || 300000;
 const EVENT_STREAM_RETRY_BASE_MS = 1000;
 const EVENT_STREAM_RETRY_MAX_MS = 10000;
 const TELEGRAM_MESSAGE_MAX_LENGTH = 3900;
@@ -35,7 +35,7 @@ const TELEGRAM_SYNC_USER_PREFIX = process.env.OPENCODE_TELEGRAM_SYNC_USER_PREFIX
 const DIFIT_ENABLED = process.env.OPENCODE_DIFIT_ENABLED !== "false";
 const DIFIT_PORT = Number(process.env.OPENCODE_DIFIT_PORT) || 4966;
 const DIFIT_BIND_HOST = "0.0.0.0";
-const DIFIT_TIMEOUT_MS = 10000;
+const DIFIT_TIMEOUT_MS = 120000;
 
 const INSTANCE_PORT_START = Number(process.env.OPENCODE_INSTANCE_PORT_START) || 50000;
 const INSTANCE_PORT_END = Number(process.env.OPENCODE_INSTANCE_PORT_END) || 59999;
@@ -1073,6 +1073,11 @@ function isRecoverableWorkspaceError(err) {
         return true;
     }
 
+    const message = err?.message || "";
+    if (message.includes("aborted") || message.includes("timeout")) {
+        return true;
+    }
+
     return false;
 }
 
@@ -1088,6 +1093,15 @@ function shouldRetryWorkspaceInteraction(err) {
     }
 
     return false;
+}
+
+async function checkServerHealth(workspace) {
+    try {
+        const result = await projectInstanceManager.probeHealth(workspace.baseUrl, 5000);
+        return result.ok;
+    } catch {
+        return false;
+    }
 }
 
 function unwrapSsePayload(payload) {
@@ -1662,8 +1676,56 @@ async function recoverReplyFromEventStream(workspace, sessionId, sourceError) {
         reason: sourceError?.message ?? String(sourceError ?? "unknown"),
     });
 
-    await waitForSessionIdle(workspace, sessionId);
-    return await fetchLatestSessionReply(workspace, sessionId);
+    const isHealthy = await checkServerHealth(workspace);
+    if (!isHealthy) {
+        console.warn("Server appears unhealthy, attempting restart...", {
+            projectPath: workspace.projectPath,
+        });
+
+        try {
+            await projectInstanceManager.stop(workspace.projectPath);
+            const newInstance = await projectInstanceManager.launch(workspace.projectPath);
+            workspace.baseUrl = newInstance.baseUrl;
+
+            console.log("Server restarted, checking session status...", {
+                projectPath: workspace.projectPath,
+                baseUrl: workspace.baseUrl,
+            });
+
+            await new Promise((r) => setTimeout(r, 2000));
+
+            const messages = await fetchSessionMessages(workspace, sessionId).catch(() => []);
+            if (messages.length > 0) {
+                const reply = await fetchLatestSessionReply(workspace, sessionId);
+                if (reply) {
+                    return reply;
+                }
+            }
+
+            throw new Error("Session may have been lost after server restart. Please retry your message.");
+        } catch (restartErr) {
+            console.error("Failed to restart server during recovery:", restartErr?.message);
+            throw new Error(`Server crashed and recovery failed: ${restartErr?.message}. Please restart manually with: opencode-telegram kill-all && npx --yes .`);
+        }
+    }
+
+    try {
+        await waitForSessionIdle(workspace, sessionId);
+        return await fetchLatestSessionReply(workspace, sessionId);
+    } catch (streamErr) {
+        console.error("Event stream recovery failed:", streamErr?.message);
+
+        const stillHealthy = await checkServerHealth(workspace);
+        if (stillHealthy) {
+            const reply = await fetchLatestSessionReply(workspace, sessionId).catch(() => "");
+            if (reply) {
+                return reply;
+            }
+            throw new Error("Operation completed but no response received. Check the OpenCode TUI for status.");
+        }
+
+        throw new Error(`Server became unresponsive during operation. Error: ${streamErr?.message}. Please restart with: opencode-telegram kill-all && npx --yes .`);
+    }
 }
 
 async function runWorkspaceInteraction(workspace, sessionId, endpoint, payload) {
@@ -2467,6 +2529,21 @@ async function loadSelectableModes(workspace) {
     }
 }
 
+async function killProcessByPort(port) {
+    try {
+        const result = execSync(`lsof -t -i :${port} 2>/dev/null || true`, { encoding: "utf-8" });
+        const pids = result.trim().split("\n").filter(Boolean);
+        for (const pid of pids) {
+            try {
+                process.kill(Number(pid), "SIGKILL");
+                console.log("Killed process by port", { port, pid });
+            } catch {}
+        }
+    } catch (err) {
+        console.warn("Failed to kill process by port", { port, error: err.message });
+    }
+}
+
 async function startDifitForProject(projectPath) {
     if (!DIFIT_ENABLED) {
         return null;
@@ -2475,39 +2552,49 @@ async function startDifitForProject(projectPath) {
     const existingProcess = difitProcessesByProject.get(projectPath);
     if (existingProcess) {
         try {
-            existingProcess.kill();
+            existingProcess.kill("SIGKILL");
         } catch {}
         difitProcessesByProject.delete(projectPath);
     }
 
+    await killProcessByPort(DIFIT_PORT);
+
     return new Promise((resolve) => {
+        let started = false;
+        let stderr = "";
+
         const timeout = setTimeout(() => {
-            console.warn("difit startup timed out", { projectPath });
+            console.warn("difit startup timed out", { projectPath, stderr: stderr.slice(0, 500) || "(none)" });
             resolve(null);
         }, DIFIT_TIMEOUT_MS);
 
         try {
-            const difit = spawn("npx", ["difit", ".", "--host", DIFIT_BIND_HOST, "--port", String(DIFIT_PORT), "--no-open", "--keep-alive"], {
+            const difit = spawn("npx", ["difit", ".", "--host", DIFIT_BIND_HOST, "--port", String(DIFIT_PORT), "--no-open", "--keep-alive", "--include-untracked"], {
                 cwd: projectPath,
                 shell: true,
             });
 
-            let started = false;
-            let stderr = "";
-
-            difit.stdout.on("data", (data) => {
-                const output = data.toString();
-                if (output.includes("server") && output.includes(String(DIFIT_PORT)) && !started) {
+            const checkForPort = (output) => {
+                console.log("difit output", { projectPath, output: output.slice(0, 200) });
+                const portMatch = output.match(/http:\/\/localhost:(\d+)/);
+                if (portMatch && !started) {
                     started = true;
                     clearTimeout(timeout);
                     difitProcessesByProject.set(projectPath, difit);
                     const localIp = getLocalIpAddress();
-                    resolve(`http://${localIp}:${DIFIT_PORT}`);
+                    const actualPort = portMatch[1];
+                    resolve(`http://${localIp}:${actualPort}`);
                 }
+            };
+
+            difit.stdout.on("data", (data) => {
+                checkForPort(data.toString());
             });
 
             difit.stderr.on("data", (data) => {
-                stderr += data.toString();
+                const output = data.toString();
+                stderr += output;
+                checkForPort(output);
             });
 
             difit.on("error", (err) => {
@@ -2870,7 +2957,23 @@ bot.on("message", async (msg) => {
             status: err?.response?.status,
             data: err?.response?.data,
         });
-        await sendTrackedMessage(chatId, "⚠️ OpenCode server error");
+
+        let errorMessage = "⚠️ OpenCode server error";
+
+        const message = (err?.message || "").toLowerCase();
+        if (message.includes("timeout") || message.includes("aborted")) {
+            errorMessage = "⏱️ Request timed out. The operation may still be running - check OpenCode TUI or try again.";
+        } else if (message.includes("connection") || message.includes("econnrefused")) {
+            errorMessage = "🔌 Connection lost to OpenCode server. It may have crashed. Try: opencode-telegram kill-all && npx --yes .";
+        } else if (message.includes("session") && message.includes("lost")) {
+            errorMessage = "🔄 Session was lost after server restart. Please retry your message.";
+        } else if (message.includes("unresponsive")) {
+            errorMessage = "💀 Server became unresponsive. Try: opencode-telegram kill-all && npx --yes .";
+        } else if (message.includes("restart")) {
+            errorMessage = err.message;
+        }
+
+        await sendTrackedMessage(chatId, errorMessage);
     } finally {
         stopTyping();
     }
