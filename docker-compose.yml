@@ -2,6 +2,13 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   opencode:
     build:
@@ -9,16 +16,28 @@ services:
       dockerfile: Dockerfile.opencode
     restart: unless-stopped
     volumes:
-      - ${HOME}/Desktop:/Users/petartopic/Desktop
-      - ${HOME}/.config/opencode:/root/.config/opencode
+      - ./workspace:/workspace
+      - opencode_config:/root/.config/opencode
     environment:
       OPENCODE_SESSION_STORE: redis
       REDIS_URL: redis://redis:6379
       OPENCODE_CONFIG_DIR: /root/.config/opencode
-    ports:
-      - "62771:62771"
+      OPENCODE_CONFIG_REPO: ${OPENCODE_CONFIG_REPO:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:62771/global/health').then((res) => res.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
 
   telegram-bot:
     build:
@@ -26,9 +45,17 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     volumes:
-      - ${HOME}/Desktop:/Users/petartopic/Desktop
+      - ./workspace:/workspace
     environment:
-      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-replace-me}
       OPENCODE_BASE_URL: http://opencode:62771
+      OPENCODE_PROJECT_ROOT: /workspace
+      OPENCODE_DIFIT_ENABLED: ${OPENCODE_DIFIT_ENABLED:-false}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     depends_on:
-      - opencode
+      opencode:
+        condition: service_healthy
+
+volumes:
+  redis_data:
+  opencode_config:

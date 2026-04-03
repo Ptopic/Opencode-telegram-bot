@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,11 @@ const INSTANCES_STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.
 const INSTANCE_PORT_START = Number(process.env.OPENCODE_INSTANCE_PORT_START) || 50000;
 const INSTANCE_PORT_END = Number(process.env.OPENCODE_INSTANCE_PORT_END) || 59999;
 const INSTANCE_STARTUP_TIMEOUT_MS = 30000;
+const OPENCODE_SERVER_PROCESS_PATTERNS = [
+    ".opencode serve",
+    "opencode serve",
+    "opencode-ai serve",
+];
 
 function parseEnvFile(content) {
     const lines = content.split(/\r?\n/);
@@ -516,15 +521,25 @@ async function runAttachMode(rawBaseUrl) {
 async function runKillAll() {
     console.log("Killing all OpenCode server instances...");
 
-    const result = spawn("pkill", ["-f", "opencode serve"], {
-        stdio: "inherit",
-        shell: process.platform === "win32",
-    });
+    const matchedBefore = listMatchingProcessIds(OPENCODE_SERVER_PROCESS_PATTERNS);
 
-    await new Promise((resolve) => {
-        result.on("close", resolve);
-        result.on("error", resolve);
-    });
+    await Promise.allSettled([...matchedBefore].map((pid) => new Promise((resolve) => {
+        try {
+            process.kill(Number(pid), "SIGKILL");
+        } catch (err) {
+            if (err?.code !== "ESRCH") {
+                console.warn("Failed to hard-kill process", {
+                    pid,
+                    message: err?.message,
+                });
+            }
+        }
+        resolve();
+    })));
+
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const stillRunning = listMatchingProcessIds(OPENCODE_SERVER_PROCESS_PATTERNS);
+    const killed = [...matchedBefore].filter((pid) => !stillRunning.has(pid)).length;
 
     try {
         if (existsSync(INSTANCES_STATE_FILE)) {
@@ -535,8 +550,28 @@ async function runKillAll() {
         console.warn("Failed to remove state file:", err?.message);
     }
 
-    console.log("Done. All OpenCode server instances have been terminated.");
+    console.log(`Done. Killed ${killed} server process(es) out of ${matchedBefore.size} matched.`);
     return 0;
+}
+
+function listMatchingProcessIds(patterns) {
+    const processIds = new Set();
+
+    for (const pattern of patterns) {
+        try {
+            const output = execSync(`pgrep -f ${JSON.stringify(pattern)} || true`, {
+                encoding: "utf8",
+            });
+            for (const line of output.split("\n")) {
+                const pid = line.trim();
+                if (pid) {
+                    processIds.add(pid);
+                }
+            }
+        } catch {}
+    }
+
+    return processIds;
 }
 
 const command = process.argv[2];

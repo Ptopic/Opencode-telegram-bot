@@ -1,13 +1,52 @@
 import axios from "axios";
-import TelegramBot from "node-telegram-bot-api";
+import { Bot } from "grammy";
 import { readdir } from "node:fs/promises";
 import { writeFileSync, readFileSync, unlinkSync, existsSync } from "node:fs";
 import { spawn, execSync } from "node:child_process";
 import { networkInterfaces, homedir } from "node:os";
 import { createConnection } from "node:net";
 import path from "node:path";
+import {
+	describeProjectRoots,
+	getProjectRoots,
+	getSharedOpenCodeBaseUrl,
+	isSharedOpenCodeMode,
+} from "./runtime-config.js";
+import {
+	buildTelegramMessageVariants as buildTelegramFormattingVariants,
+	splitTelegramMessageContent as splitTelegramFormattedContent,
+} from "./telegram-formatting.js";
+import { appendTelegramUpstreamFormattingGuide } from "./telegram-upstream-prompt.js";
+import {
+	deriveRepoDirectoryName,
+	buildAuthenticatedUrl,
+	getAvailableGitBinary,
+	getCurrentBranch,
+	getGitRepoRoot,
+	getUpstreamBranch,
+	resolveCloneTargetPath,
+	runGit,
+	runGitOrThrow,
+} from "./git-ops.js";
+import {
+	buildGitCommitMessagePrompt,
+	extractCommitMessageFromReply,
+} from "./git-commit-message.js";
 
-const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
+const telegramToken = process.env.TELEGRAM_TOKEN;
+
+if (!telegramToken) {
+    throw new Error("Missing TELEGRAM_TOKEN environment variable");
+}
+
+const bot = new Bot(telegramToken);
+
+const resolvedGitBinary = getAvailableGitBinary();
+if (!resolvedGitBinary) {
+	throw new Error("Git binary not found at startup. Install git in this runtime or set GIT_BINARY before starting the bot.");
+}
+
+console.log("Git binary available for telegram bot", { gitBinary: resolvedGitBinary });
 
 const TYPING_INTERVAL_MS = 4000;
 const COMMAND_REFRESH_MS = 10 * 60 * 1000;
@@ -15,11 +54,14 @@ const COMMAND_CACHE_MS = 2 * 60 * 1000;
 const MODE_CACHE_MS = 2 * 60 * 1000;
 const WORKSPACE_HEALTH_TIMEOUT_MS = 20000;
 const WORKSPACE_HEALTH_POLL_MS = 400;
-const OPENCODE_BASE_URL = (process.env.OPENCODE_BASE_URL || process.env.OPENCODE_URL || "http://127.0.0.1:4096").replace(/\/+$/, "");
+const SHARED_OPENCODE_MODE = isSharedOpenCodeMode();
+const SHARED_OPENCODE_BASE_URL = getSharedOpenCodeBaseUrl();
 const PROJECT_BUTTON_LIMIT = 80;
 const INTERACTION_REQUEST_TIMEOUT_MS = Number(process.env.OPENCODE_INTERACTION_TIMEOUT_MS) || 120000;
 const INTERACTION_RETRY_LIMIT = 1;
 const EVENT_STREAM_TIMEOUT_MS = Number(process.env.OPENCODE_EVENT_STREAM_TIMEOUT_MS) || 300000;
+const SHARED_MODE_REPLY_POLL_INTERVAL_MS = Number(process.env.OPENCODE_REPLY_POLL_INTERVAL_MS) || 3000;
+const SHARED_MODE_REPLY_POLL_TIMEOUT_MS = Number(process.env.OPENCODE_REPLY_POLL_TIMEOUT_MS) || 60000;
 const EVENT_STREAM_RETRY_BASE_MS = 1000;
 const EVENT_STREAM_RETRY_MAX_MS = 10000;
 const TELEGRAM_MESSAGE_MAX_LENGTH = 3900;
@@ -31,7 +73,6 @@ const TELEGRAM_SYNC_INCLUDE_THINKING = process.env.OPENCODE_TELEGRAM_SYNC_INCLUD
 const TELEGRAM_SYNC_INCLUDE_CODE_CHANGES = process.env.OPENCODE_TELEGRAM_SYNC_INCLUDE_CODE_CHANGES === "true";
 const TELEGRAM_SYNC_MIRROR_USER_MESSAGES = process.env.OPENCODE_TELEGRAM_SYNC_MIRROR_USER_MESSAGES !== "false";
 const TELEGRAM_SYNC_USER_PREFIX = process.env.OPENCODE_TELEGRAM_SYNC_USER_PREFIX || "👨‍💻";
-
 const DIFIT_ENABLED = process.env.OPENCODE_DIFIT_ENABLED !== "false";
 const DIFIT_PORT = Number(process.env.OPENCODE_DIFIT_PORT) || 4966;
 const DIFIT_BIND_HOST = "0.0.0.0";
@@ -42,7 +83,6 @@ const INSTANCE_PORT_END = Number(process.env.OPENCODE_INSTANCE_PORT_END) || 5999
 const INSTANCE_STARTUP_TIMEOUT_MS = Number(process.env.OPENCODE_INSTANCE_STARTUP_TIMEOUT_MS) || 30000;
 const INSTANCE_HEALTH_CHECK_MS = 500;
 const INSTANCES_STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
-const INSTANCE_STARTING_STALE_TIMEOUT_MS = Number(process.env.OPENCODE_INSTANCE_STARTING_STALE_TIMEOUT_MS) || 20000;
 
 const difitProcessesByProject = new Map();
 
@@ -213,39 +253,10 @@ class ProjectInstanceManager {
         }
 
         if (existing && existing.status === "starting") {
-            const waitDeadline = Date.now() + INSTANCE_STARTING_STALE_TIMEOUT_MS;
-
             while (existing.status === "starting") {
-                const pidAlive = typeof existing.pid === "number" ? await this.isPortInUse(existing.port) : false;
-                const hasProcessHandle = !!existing.process;
-
-                if (!hasProcessHandle && !pidAlive) {
-                    console.warn("Detected stale starting instance, resetting", {
-                        projectPath,
-                        port: existing.port,
-                        pid: existing.pid,
-                    });
-                    this.instances.delete(projectPath);
-                    break;
-                }
-
-                if (Date.now() >= waitDeadline) {
-                    console.warn("Starting instance wait timeout, resetting", {
-                        projectPath,
-                        port: existing.port,
-                        pid: existing.pid,
-                    });
-                    this.instances.delete(projectPath);
-                    break;
-                }
-
                 await new Promise((r) => setTimeout(r, 100));
             }
-
-            const afterWait = this.instances.get(projectPath);
-            if (afterWait && afterWait.status !== "starting") {
-                return afterWait;
-            }
+            return this.instances.get(projectPath);
         }
 
         for (const [path, instance] of this.instances) {
@@ -468,60 +479,32 @@ function getLocalIpAddress() {
     return "127.0.0.1";
 }
 
-function sanitizeRootScope(value) {
-    return String(value || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9_-]+/g, "-")
-        .replace(/^-+|-+$/g, "") || "project";
-}
-
-function parseProjectRootsFromEnv(raw) {
-    if (typeof raw !== "string" || raw.trim() === "") return [];
-
-    return raw
-        .split(";")
-        .map((entry) => entry.trim())
-        .filter(Boolean)
-        .map((entry, index) => {
-            const [labelPart, pathPart] = entry.includes("=")
-                ? entry.split(/=(.+)/)
-                : ["", entry];
-            const normalizedPath = (pathPart || "").trim().replace(/\/+$/, "");
-            if (!normalizedPath) return null;
-
-            const label = (labelPart || "").trim() || path.basename(normalizedPath) || `Root ${index + 1}`;
-            const scope = sanitizeRootScope(label);
-            return {
-                scope,
-                path: normalizedPath,
-                label,
-            };
-        })
-        .filter(Boolean);
-}
-
-const PROJECT_ROOTS = parseProjectRootsFromEnv(process.env.OPENCODE_PROJECT_ROOTS);
-if (PROJECT_ROOTS.length === 0) {
-    PROJECT_ROOTS.push(
-        { scope: "petar", path: "/Users/petartopic/Desktop/Petar", label: "Petar" },
-        { scope: "profico", path: "/Users/petartopic/Desktop/Profico", label: "Profico" },
-    );
-}
+const PROJECT_ROOTS = getProjectRoots();
+const PROJECT_ROOTS_DESCRIPTION = describeProjectRoots(PROJECT_ROOTS);
 
 const BUILTIN_TELEGRAM_COMMANDS = [
-    { command: "session", description: "Show current OpenCode session" },
-    { command: "sessions", description: "List sessions with slugs" },
-    { command: "refresh", description: "Resync Telegram chat from OpenCode session" },
-    { command: "clear_sessions", description: "Delete all sessions in current project (/clear-sessions also works)" },
-    { command: "projects", description: "List Desktop projects" },
+	{ command: "close", description: "Clear current project and reset OpenCode runtime state" },
+	{ command: "session", description: "Show current OpenCode session" },
+	{ command: "sessions", description: "List sessions with slugs" },
+	{ command: "refresh", description: "Resync Telegram chat from OpenCode session" },
+	{ command: "clear_sessions", description: "Delete all sessions in current project (/clear-sessions also works)" },
+	{ command: "project", description: "List available projects" },
+	{ command: "projects", description: "List available projects" },
     { command: "new", description: "Start a new OpenCode session" },
     { command: "switch", description: "Switch to session id" },
     { command: "run", description: "Send prompt text to OpenCode" },
     { command: "mode", description: "Set OpenCode mode (agent)" },
-    { command: "stop", description: "Stop current OpenCode session execution" },
-    { command: "commandsync", description: "Refresh Telegram commands" },
-    { command: "debug_runtime", description: "Show runtime and sync diagnostics" },
-    { command: "help", description: "Show available commands" },
+    { command: "models", description: "List and switch AI models" },
+	{ command: "debug", description: "Show OpenCode configuration and health status" },
+	{ command: "stop", description: "Stop current OpenCode session execution" },
+	{ command: "git_clone", description: "Clone a git repo into the workspace" },
+	{ command: "git_fetch", description: "Fetch origin/main for current project" },
+	{ command: "git_pull", description: "Pull origin/main for current project" },
+	{ command: "git_commit", description: "Stage all changes and create a git commit" },
+	{ command: "git_push", description: "Push current branch to origin" },
+	{ command: "git_branch", description: "Create and checkout a branch" },
+	{ command: "commandsync", description: "Refresh Telegram commands" },
+	{ command: "help", description: "Show available commands" },
 ];
 
 const FALLBACK_COMMANDS = [
@@ -546,7 +529,6 @@ const seenSessionMessageKeysByChatProject = new Map();
 const selectedModeByChatProject = new Map();
 
 let liveSyncInFlight = false;
-const liveSyncInFlightByChatProject = new Set();
 
 function trackMessageId(chatId, messageId) {
     if (typeof messageId !== "number") return;
@@ -557,9 +539,82 @@ function trackMessageId(chatId, messageId) {
 }
 
 async function sendTrackedMessage(chatId, text, options) {
-    const sent = await bot.sendMessage(chatId, text, options);
-    trackMessageId(chatId, sent?.message_id);
-    return sent;
+    const variants = getTelegramMessageVariants(text);
+
+    if (!variants.htmlText) {
+        const sent = await bot.api.sendMessage(chatId, variants.plainText, options);
+        trackMessageId(chatId, sent?.message_id);
+        return sent;
+    }
+
+    try {
+        const sent = await bot.api.sendMessage(chatId, variants.htmlText, {
+            ...options,
+            parse_mode: "HTML",
+        });
+        trackMessageId(chatId, sent?.message_id);
+        return sent;
+    } catch (err) {
+        if (!isTelegramParseEntitiesError(err)) {
+            throw err;
+        }
+
+        console.warn("Telegram formatted message rejected, retrying as plain text", {
+            chatId,
+            description: err?.response?.body?.description ?? err?.message,
+        });
+
+        const fallbackOptions = { ...(options ?? {}) };
+        delete fallbackOptions.parse_mode;
+
+        const sent = await bot.api.sendMessage(chatId, variants.plainText, fallbackOptions);
+        trackMessageId(chatId, sent?.message_id);
+        return sent;
+    }
+
+}
+
+function isTelegramParseEntitiesError(err) {
+    const description = err?.response?.body?.description ?? err?.message ?? "";
+    if (typeof description !== "string") return false;
+    const normalized = description.toLowerCase();
+    return (
+        normalized.includes("entities") ||
+        normalized.includes("parse") ||
+        normalized.includes("can't parse") ||
+        normalized.includes("unsupported start tag") ||
+        normalized.includes("unsupported end tag") ||
+        normalized.includes("parse_mode")
+    );
+}
+
+function getTelegramErrorDetails(err) {
+    const baseError = err?.error ?? err;
+    return {
+        code: baseError?.code,
+        message: baseError?.message,
+        description: baseError?.description ?? baseError?.response?.body?.description,
+    };
+}
+
+function buildTelegramMessageVariants(input) {
+	return buildTelegramFormattingVariants(input);
+}
+
+function getTelegramMessageVariants(input) {
+    return buildTelegramMessageVariants(input);
+}
+
+async function sendChunkedTrackedMessage(chatId, text) {
+	const chunks = splitTelegramMessageContent(String(text ?? ""));
+	if (chunks.length === 0) {
+		await sendTrackedMessage(chatId, String(text ?? ""));
+		return;
+	}
+
+	for (const chunk of chunks) {
+		await sendTrackedMessage(chatId, chunk);
+	}
 }
 
 function isIgnorableTelegramCallbackError(err) {
@@ -575,7 +630,7 @@ function isIgnorableTelegramCallbackError(err) {
 async function answerCallbackQuerySafely(queryId, options) {
     if (!queryId) return;
     try {
-        await bot.answerCallbackQuery(queryId, options);
+        await bot.api.answerCallbackQuery(queryId, options);
     } catch (err) {
         if (isIgnorableTelegramCallbackError(err)) {
             console.warn("Ignoring stale Telegram callback query", {
@@ -604,7 +659,7 @@ async function clearTrackedMessages(chatId) {
     const deletePromises = [];
     for (const messageId of uniqueIds) {
         deletePromises.push(
-            bot.deleteMessage(chatId, String(messageId)).catch(() => {
+            bot.api.deleteMessage(chatId, messageId).catch(() => {
                 // Message may not exist or be too old to delete
             }),
         );
@@ -714,7 +769,7 @@ function looksLikeHtmlDocument(text) {
 
 function startTyping(chatId) {
     const sendTyping = () => {
-        bot.sendChatAction(chatId, "typing").catch(() => {});
+        bot.api.sendChatAction(chatId, "typing").catch(() => {});
     };
 
     sendTyping();
@@ -1346,7 +1401,7 @@ function getMessageRole(message) {
 
 function formatSessionMessageForTelegram(message) {
     const text = extractReply(message);
-    const patchSummary = TELEGRAM_SYNC_INCLUDE_CODE_CHANGES ? buildPatchSummaryForMessage(message) : "";
+    const patchSummary = TELEGRAM_SYNC_INCLUDE_CODE_CHANGES ? buildPatchSummaryForMessage(message) : null;
 
     if (!text && !patchSummary) return null;
 
@@ -1355,49 +1410,72 @@ function formatSessionMessageForTelegram(message) {
 
     if (role === "user") {
         if (text && patchSummary) {
-            return `${TELEGRAM_SYNC_USER_PREFIX}\n${text}\n\n${patchSummary}`;
+            return buildTelegramMessageVariants({
+                plainText: `${TELEGRAM_SYNC_USER_PREFIX}\n${text}\n\n${patchSummary.plainText}`,
+            });
         }
         if (text) {
-            return `${TELEGRAM_SYNC_USER_PREFIX}\n${text}`;
+            return buildTelegramMessageVariants({
+                plainText: `${TELEGRAM_SYNC_USER_PREFIX}\n${text}`,
+            });
         }
         return patchSummary;
     }
 
     if (role === "assistant") {
         if (text && patchSummary) {
-            return `${prefix}\n${text}\n\n${patchSummary}`;
+            return buildTelegramMessageVariants({
+                plainText: `${prefix}\n${text}\n\n${patchSummary.plainText}`,
+            });
         }
 
         if (text) {
-            return `${prefix}\n${text}`;
+            return buildTelegramMessageVariants({
+                plainText: `${prefix}\n${text}`,
+            });
         }
 
-        return `${prefix}\n${patchSummary}`;
+        return buildTelegramMessageVariants({
+            plainText: `${prefix}\n${patchSummary.plainText}`,
+        });
     }
 
     if (text && patchSummary) {
-        return `${prefix}:\n${text}\n\n${patchSummary}`;
+        return buildTelegramMessageVariants({
+            plainText: `${prefix}:\n${text}\n\n${patchSummary.plainText}`,
+        });
     }
 
     if (text) {
-        return `${prefix}:\n${text}`;
+        return buildTelegramMessageVariants({
+            plainText: `${prefix}:\n${text}`,
+        });
     }
 
-    return `${prefix}:\n${patchSummary}`;
+    return buildTelegramMessageVariants({
+        plainText: `${prefix}:\n${patchSummary.plainText}`,
+    });
 }
 
 function formatAssistantReplyForTelegram(text) {
     if (typeof text !== "string") return text;
     const trimmed = text.trim();
     if (!trimmed) return text;
-    if (trimmed.startsWith("🤖\n") || trimmed === "🤖") return text;
-    return `🤖\n${text}`;
+    if (trimmed.startsWith("🤖\n") || trimmed === "🤖") {
+        return buildTelegramMessageVariants({
+            plainText: text,
+        });
+    }
+    return buildTelegramMessageVariants({
+        plainText: `🤖\n${text}`,
+    });
 }
 
 function shouldSyncMessageToTelegram(message) {
     const role = getMessageRole(message);
     const hasText = extractReply(message) !== "";
-    const hasPatchSummary = TELEGRAM_SYNC_INCLUDE_CODE_CHANGES && buildPatchSummaryForMessage(message) !== "";
+    const patchSummary = TELEGRAM_SYNC_INCLUDE_CODE_CHANGES ? buildPatchSummaryForMessage(message) : null;
+    const hasPatchSummary = Boolean(patchSummary?.plainText);
     if (!hasText && !hasPatchSummary) return false;
 
     if (role === "assistant") return true;
@@ -1415,7 +1493,7 @@ function getMessageParts(message) {
 
 function buildPatchSummaryForMessage(message) {
     const parts = getMessageParts(message);
-    if (parts.length === 0) return "";
+    if (parts.length === 0) return null;
 
     const changedFiles = [];
     for (const part of parts) {
@@ -1428,22 +1506,25 @@ function buildPatchSummaryForMessage(message) {
         }
     }
 
-    if (changedFiles.length === 0) return "";
+    if (changedFiles.length === 0) return null;
 
     const unique = [...new Set(changedFiles)].slice(0, 40);
-    return [
+    const plainText = [
         "```text",
         "Code changes:",
         ...unique.map((file) => `- ${file}`),
         "```",
     ].join("\n");
+    return buildTelegramMessageVariants({
+        plainText,
+    });
 }
 
 function getMessageContentFingerprint(message) {
     const role = getMessageRole(message) ?? "unknown";
     const text = extractReply(message).replace(/\s+/g, " ").trim();
-    const patchSummary = TELEGRAM_SYNC_INCLUDE_CODE_CHANGES ? buildPatchSummaryForMessage(message) : "";
-    const normalizedPatch = patchSummary.replace(/\s+/g, " ").trim();
+    const patchSummary = TELEGRAM_SYNC_INCLUDE_CODE_CHANGES ? buildPatchSummaryForMessage(message) : null;
+    const normalizedPatch = (patchSummary?.plainText ?? "").replace(/\s+/g, " ").trim();
     const combined = [role, text, normalizedPatch].join("|");
 
     if (combined === "||") return "empty";
@@ -1559,27 +1640,8 @@ async function fetchSessionMessages(workspace, sessionId) {
     return getSyncableSessionMessages(sessionRes?.data);
 }
 
-function splitForTelegram(text, maxLength = TELEGRAM_MESSAGE_MAX_LENGTH) {
-    if (typeof text !== "string") return [];
-
-    const normalized = text.trim();
-    if (!normalized) return [];
-    if (normalized.length <= maxLength) return [normalized];
-
-    const chunks = [];
-    let remaining = normalized;
-
-    while (remaining.length > maxLength) {
-        let cut = remaining.lastIndexOf("\n", maxLength);
-        if (cut <= 0) cut = remaining.lastIndexOf(" ", maxLength);
-        if (cut <= 0) cut = maxLength;
-
-        chunks.push(remaining.slice(0, cut).trim());
-        remaining = remaining.slice(cut).trim();
-    }
-
-    if (remaining) chunks.push(remaining);
-    return chunks.filter(Boolean);
+function splitTelegramMessageContent(message, maxLength = TELEGRAM_MESSAGE_MAX_LENGTH) {
+	return splitTelegramFormattedContent(message, maxLength);
 }
 
 function getSyncableSessionMessages(data) {
@@ -1606,10 +1668,11 @@ async function syncTelegramChatFromSession(chatId, workspace, sessionId, options
     sessionByChatProject.set(chatProjectKey, sessionId);
 
     const rawMessages = await fetchSessionMessages(workspace, sessionId);
-    const syncMessages = rawMessages
-        .filter((message) => shouldSyncMessageToTelegram(message))
-        .map((message) => formatSessionMessageForTelegram(message))
-        .filter(Boolean);
+    rememberSessionMessageKeys(chatProjectKey, rawMessages);
+        const syncMessages = rawMessages
+            .filter((message) => shouldSyncMessageToTelegram(message))
+            .map((message) => formatSessionMessageForTelegram(message))
+            .filter(Boolean);
 
     const truncated = syncMessages.length > TELEGRAM_SYNC_MESSAGE_LIMIT;
     const finalMessages = truncated ? syncMessages.slice(syncMessages.length - TELEGRAM_SYNC_MESSAGE_LIMIT) : syncMessages;
@@ -1628,7 +1691,6 @@ async function syncTelegramChatFromSession(chatId, workspace, sessionId, options
             chatId,
             "Session has no assistant responses yet.",
         );
-        rememberSessionMessageKeys(chatProjectKey, rawMessages);
         return;
     }
 
@@ -1637,13 +1699,11 @@ async function syncTelegramChatFromSession(chatId, workspace, sessionId, options
     }
 
     for (const item of finalMessages) {
-        const chunks = splitForTelegram(item);
+        const chunks = splitTelegramMessageContent(item);
         for (const chunk of chunks) {
             await sendTrackedMessage(chatId, chunk);
         }
     }
-
-    rememberSessionMessageKeys(chatProjectKey, rawMessages);
 }
 
 async function waitForSessionIdle(workspace, sessionId, timeoutMs = EVENT_STREAM_TIMEOUT_MS) {
@@ -1673,6 +1733,7 @@ async function waitForSessionIdle(workspace, sessionId, timeoutMs = EVENT_STREAM
                 throw new Error(`Event stream unavailable (${response.status})`);
             }
 
+            console.log(`[sse] Connected to ${response.url} (status ${response.status})`);
             retryDelay = EVENT_STREAM_RETRY_BASE_MS;
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
@@ -1691,9 +1752,10 @@ async function waitForSessionIdle(workspace, sessionId, timeoutMs = EVENT_STREAM
                     if (!event || typeof event !== "object") continue;
 
                     const eventSessionId = getEventSessionId(event);
+                    const eventType = typeof event.type === "string" ? event.type : "";
+                    console.log(`[sse] Event type=${eventType} session=${eventSessionId} lookingFor=${sessionId}`);
                     if (eventSessionId !== sessionId) continue;
 
-                    const eventType = typeof event.type === "string" ? event.type : "";
                     if (eventType === "session.idle") {
                         clearTimeout(timeout);
                         controller.abort();
@@ -1721,8 +1783,7 @@ async function waitForSessionIdle(workspace, sessionId, timeoutMs = EVENT_STREAM
     throw lastError ?? new Error(`Timed out waiting for session ${sessionId} to become idle`);
 }
 
-async function fetchLatestSessionReply(workspace, sessionId) {
-    const messages = await fetchSessionMessages(workspace, sessionId);
+function fetchLatestSessionReplyFromMessages(messages) {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
         const text = extractReply(messages[i]);
         if (!text) continue;
@@ -1737,6 +1798,47 @@ async function fetchLatestSessionReply(workspace, sessionId) {
     return "";
 }
 
+async function fetchLatestSessionReply(workspace, sessionId) {
+    const messages = await fetchSessionMessages(workspace, sessionId);
+    return fetchLatestSessionReplyFromMessages(messages);
+}
+
+async function waitForReplyViaPolling(workspace, sessionId, timeoutMs = SHARED_MODE_REPLY_POLL_TIMEOUT_MS) {
+    const deadline = Date.now() + timeoutMs;
+    const pollInterval = SHARED_MODE_REPLY_POLL_INTERVAL_MS;
+    let lastMessageCount = 0;
+
+    while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+
+        try {
+            const messages = await fetchSessionMessages(workspace, sessionId);
+            if (messages.length > 0 && messages.length !== lastMessageCount) {
+                const roles = messages.map(m => getMessageRole(m) || "unknown");
+                console.log(`[poll] ${messages.length} messages, roles: ${JSON.stringify(roles)}`);
+                if (messages.length <= 5) {
+                    const keys = messages.map(m => Object.keys(m).join(","));
+                    console.log(`[poll] message keys: ${JSON.stringify(keys)}`);
+                    if (messages.length > 1) {
+                        const lastMsg = messages[messages.length - 1];
+                        console.log(`[poll] last msg sample: ${JSON.stringify(lastMsg).slice(0, 500)}`);
+                    }
+                }
+                for (let i = messages.length - 1; i >= 0; i -= 1) {
+                    const text = extractReply(messages[i]);
+                    if (!text) continue;
+                    if (isAssistantLikeMessage(messages[i])) {
+                        return text;
+                    }
+                }
+            }
+            lastMessageCount = messages.length;
+        } catch {}
+    }
+
+    return null;
+}
+
 async function recoverReplyFromEventStream(workspace, sessionId, sourceError) {
     console.warn("Recovering interaction via event stream", {
         projectPath: workspace.projectPath,
@@ -1745,11 +1847,17 @@ async function recoverReplyFromEventStream(workspace, sessionId, sourceError) {
         reason: sourceError?.message ?? String(sourceError ?? "unknown"),
     });
 
-    const isHealthy = await checkServerHealth(workspace);
-    if (!isHealthy) {
-        console.warn("Server appears unhealthy, attempting restart...", {
-            projectPath: workspace.projectPath,
-        });
+	const isHealthy = await checkServerHealth(workspace);
+	if (!isHealthy) {
+		if (SHARED_OPENCODE_MODE) {
+			throw new Error(
+				`Shared OpenCode service is unavailable at ${workspace.baseUrl}. Check your Docker Compose services and retry.`,
+			);
+		}
+
+		console.warn("Server appears unhealthy, attempting restart...", {
+			projectPath: workspace.projectPath,
+		});
 
         try {
             await projectInstanceManager.stop(workspace.projectPath);
@@ -1778,6 +1886,20 @@ async function recoverReplyFromEventStream(workspace, sessionId, sourceError) {
         }
     }
 
+    if (SHARED_OPENCODE_MODE) {
+        console.log("[recovery] Using polling-based reply detection (shared mode)");
+        const reply = await waitForReplyViaPolling(workspace, sessionId);
+        if (reply) return reply;
+
+        const stillHealthy = await checkServerHealth(workspace);
+        if (stillHealthy) {
+            const fallbackReply = await fetchLatestSessionReply(workspace, sessionId).catch(() => "");
+            if (fallbackReply) return fallbackReply;
+        }
+
+        throw new Error("Shared OpenCode service did not produce a response in time.");
+    }
+
     try {
         await waitForSessionIdle(workspace, sessionId);
         return await fetchLatestSessionReply(workspace, sessionId);
@@ -1793,15 +1915,22 @@ async function recoverReplyFromEventStream(workspace, sessionId, sourceError) {
             throw new Error("Operation completed but no response received. Check the OpenCode TUI for status.");
         }
 
-        throw new Error(`Server became unresponsive during operation. Error: ${streamErr?.message}. Please restart with: opencode-telegram kill-all && npx --yes .`);
-    }
+		if (SHARED_OPENCODE_MODE) {
+			throw new Error(`Shared OpenCode service became unresponsive during operation: ${streamErr?.message}`);
+		}
+
+		throw new Error(`Server became unresponsive during operation. Error: ${streamErr?.message}. Please restart with: opencode-telegram kill-all && npx --yes .`);
+	}
 }
 
 async function runWorkspaceInteraction(workspace, sessionId, endpoint, payload) {
+    const t0 = Date.now();
     try {
         const interaction = await postWorkspaceInteraction(workspace, sessionId, endpoint, payload);
+        console.log(`[timing] POST ${endpoint} completed in ${Date.now() - t0}ms`);
         const directReply = extractReply(interaction?.res?.data);
         if (directReply) {
+            console.log(`[timing] Direct reply extracted in ${Date.now() - t0}ms`);
             return {
                 workspace: interaction.workspace,
                 response: interaction.res,
@@ -1810,6 +1939,7 @@ async function runWorkspaceInteraction(workspace, sessionId, endpoint, payload) 
         }
 
         const recoveredReply = await recoverReplyFromEventStream(interaction.workspace, sessionId);
+        console.log(`[timing] Event stream recovery done in ${Date.now() - t0}ms`);
         if (recoveredReply) {
             return {
                 workspace: interaction.workspace,
@@ -1856,10 +1986,12 @@ async function restartWorkspaceRuntime(projectPath, reason) {
 }
 
 async function stopWorkspaceRuntime(projectPath, options = {}) {
-    await projectInstanceManager.stop(projectPath);
+	if (!SHARED_OPENCODE_MODE) {
+		await projectInstanceManager.stop(projectPath);
+	}
 
-    const runtime = ensureWorkspaceRecord(projectPath);
-    runtime.status = "stopped";
+	const runtime = ensureWorkspaceRecord(projectPath);
+	runtime.status = "stopped";
     runtime.baseUrl = null;
     runtime.lastUsedAt = Date.now();
 
@@ -1873,7 +2005,11 @@ async function stopWorkspaceRuntime(projectPath, options = {}) {
 }
 
 async function stopAllWorkspaceRuntimesExcept(projectPath, reason) {
-    const stops = [];
+	if (SHARED_OPENCODE_MODE) {
+		return;
+	}
+
+	const stops = [];
     for (const [path, instance] of projectInstanceManager.instances) {
         if (path !== projectPath) {
             console.log(`Stopping instance for ${path} (${reason})`);
@@ -1881,6 +2017,351 @@ async function stopAllWorkspaceRuntimesExcept(projectPath, reason) {
         }
     }
     await Promise.allSettled(stops);
+}
+
+function clearChatState(chatId) {
+    activeProjectPathByChat.delete(chatId);
+    projectDirectoryByChat.delete(chatId);
+    trackedMessageIdsByChat.delete(chatId);
+
+    for (const key of sessionByChatProject.keys()) {
+        const parsed = parseChatProjectKey(key);
+        if (parsed?.chatId === chatId) {
+            sessionByChatProject.delete(key);
+        }
+    }
+
+    for (const key of sessionDirectoryByChatProject.keys()) {
+        const parsed = parseChatProjectKey(key);
+        if (parsed?.chatId === chatId) {
+            sessionDirectoryByChatProject.delete(key);
+        }
+    }
+
+    for (const key of seenSessionMessageKeysByChatProject.keys()) {
+        const parsed = parseChatProjectKey(key);
+        if (parsed?.chatId === chatId) {
+            seenSessionMessageKeysByChatProject.delete(key);
+        }
+    }
+
+    for (const key of selectedModeByChatProject.keys()) {
+        const parsed = parseChatProjectKey(key);
+        if (parsed?.chatId === chatId) {
+            selectedModeByChatProject.delete(key);
+        }
+    }
+}
+
+function clearGlobalOpenCodeState() {
+    workspaceRuntimeByProjectPath.clear();
+    commandAliasByProjectPath.clear();
+    commandCacheByProjectPath.clear();
+    modeCacheByProjectPath.clear();
+    sessionProjectPathById.clear();
+    opencodeProjectByPath.clear();
+    projectInstanceManager.instances.clear();
+    projectInstanceManager.clearState();
+}
+
+function getDefaultCloneRoot() {
+	return PROJECT_ROOTS[0]?.path ?? "/workspace";
+}
+
+function formatGitCommandResult(title, repoRoot, stdout, stderr) {
+	const sections = [title, `Repo: ${repoRoot}`];
+	const trimmedStdout = String(stdout ?? "").trim();
+	const trimmedStderr = String(stderr ?? "").trim();
+	if (trimmedStdout) {
+		sections.push(`Output:\n${trimmedStdout}`);
+	}
+	if (trimmedStderr) {
+		sections.push(`Notes:\n${trimmedStderr}`);
+	}
+	return sections.join("\n\n");
+}
+
+async function ensureActiveGitRepo(chatId, workspace) {
+	const repoRoot = await getGitRepoRoot(workspace.projectPath);
+	if (!repoRoot) {
+		await sendTrackedMessage(chatId, "Active project is not a git repository. Use /git-clone or switch to a git project.");
+		return null;
+	}
+	return repoRoot;
+}
+
+async function createEphemeralWorkspaceSession(workspace, title) {
+	const createRes = await axios.post(`${workspace.baseUrl}/session`, {
+		title,
+		directory: workspace.projectPath,
+		cwd: workspace.projectPath,
+	}, { timeout: 15000 });
+
+	const sessionId = createRes?.data?.id;
+	if (!sessionId || typeof sessionId !== "string") {
+		throw new Error("Failed to create temporary OpenCode session");
+	}
+	return sessionId;
+}
+
+async function generateGitCommitMessage(workspace, context) {
+	const tempSessionId = await createEphemeralWorkspaceSession(workspace, `git-commit-${Date.now()}`);
+	try {
+		const interaction = await runWorkspaceInteraction(workspace, tempSessionId, "message", {
+			parts: [{
+				type: "text",
+				text: buildGitCommitMessagePrompt(context),
+			}],
+		});
+		return extractCommitMessageFromReply(interaction.reply || extractReply(interaction.response?.data));
+	} finally {
+		await axios.delete(`${workspace.baseUrl}/session/${tempSessionId}`).catch(() => {});
+	}
+}
+
+async function switchProjectToPath(chatId, projectPath) {
+	const runtime = await ensureWorkspaceRuntime(projectPath);
+	activeProjectPathByChat.set(chatId, projectPath);
+	const sessionId = await createNewSession(chatId, runtime);
+	await tuiSelectSession(runtime, sessionId);
+	await syncTelegramCommands();
+	await syncTelegramChatFromSession(chatId, runtime, sessionId, { clearChat: true });
+	return runtime;
+}
+
+async function handleGitClone(chatId, rawArguments) {
+	const [repoUrl, requestedDirectory = ""] = rawArguments.split(/\s+/).filter(Boolean);
+	if (!repoUrl) {
+		await sendTrackedMessage(chatId, "Usage: /git-clone <repo_url> [directory]");
+		return;
+	}
+
+	const cloneRoot = getDefaultCloneRoot();
+	const targetPath = resolveCloneTargetPath(cloneRoot, repoUrl, requestedDirectory);
+	if (existsSync(targetPath)) {
+		await sendTrackedMessage(chatId, `Clone target already exists: ${targetPath}`);
+		return;
+	}
+
+	const authenticatedUrl = buildAuthenticatedUrl(repoUrl);
+	const cloneResult = await runGitOrThrow(["clone", authenticatedUrl, targetPath], {
+		cwd: cloneRoot,
+		timeoutMs: 10 * 60 * 1000,
+	});
+
+	await loadProjectDirectory(chatId);
+	const runtime = await switchProjectToPath(chatId, targetPath);
+	await sendChunkedTrackedMessage(
+		chatId,
+		formatGitCommandResult(
+			`Cloned ${path.basename(targetPath) || deriveRepoDirectoryName(repoUrl)} and switched the active project.\nOpenCode: ${runtime.baseUrl}`,
+			targetPath,
+			cloneResult.stdout,
+			cloneResult.stderr,
+		),
+	);
+}
+
+async function handleGitFetch(chatId, workspace, rawArguments) {
+	const repoRoot = await ensureActiveGitRepo(chatId, workspace);
+	if (!repoRoot) return;
+	const [remoteArg = "", branchArg = ""] = rawArguments.split(/\s+/).filter(Boolean);
+	const upstream = await getUpstreamBranch(repoRoot);
+	const [upstreamRemote = "origin", upstreamBranch = ""] = upstream ? upstream.split("/", 2) : [];
+	const currentBranch = await getCurrentBranch(repoRoot);
+	const remote = remoteArg || upstreamRemote || "origin";
+	const branch = branchArg || upstreamBranch || currentBranch || "main";
+	const result = await runGitOrThrow(["fetch", remote, branch], { cwd: repoRoot, timeoutMs: 5 * 60 * 1000 });
+	await sendChunkedTrackedMessage(chatId, formatGitCommandResult(`Fetched ${remote}/${branch}.`, repoRoot, result.stdout, result.stderr));
+}
+
+async function handleGitPull(chatId, workspace, rawArguments) {
+	const repoRoot = await ensureActiveGitRepo(chatId, workspace);
+	if (!repoRoot) return;
+	const args = rawArguments.split(/\s+/).filter(Boolean);
+	let result;
+	let label;
+	if (args.length >= 2) {
+		const [remote, branch] = args;
+		result = await runGitOrThrow(["pull", "--ff-only", remote, branch], { cwd: repoRoot, timeoutMs: 5 * 60 * 1000 });
+		label = `Pulled ${remote}/${branch} with --ff-only.`;
+	} else {
+		const upstream = await getUpstreamBranch(repoRoot);
+		if (!upstream) {
+			await sendTrackedMessage(chatId, "Current branch has no upstream. Use /git-pull <remote> <branch> or set upstream first.");
+			return;
+		}
+		result = await runGitOrThrow(["pull", "--ff-only"], { cwd: repoRoot, timeoutMs: 5 * 60 * 1000 });
+		label = `Pulled ${upstream} with --ff-only.`;
+	}
+	await sendChunkedTrackedMessage(chatId, formatGitCommandResult(label, repoRoot, result.stdout, result.stderr));
+}
+
+async function handleGitPush(chatId, workspace, rawArguments) {
+	const repoRoot = await ensureActiveGitRepo(chatId, workspace);
+	if (!repoRoot) return;
+	const currentBranch = await getCurrentBranch(repoRoot);
+	if (!currentBranch) {
+		await sendTrackedMessage(chatId, "Could not determine the current branch for push.");
+		return;
+	}
+	const [remote = "origin", branch = currentBranch] = rawArguments.split(/\s+/).filter(Boolean);
+	let result = await runGit(["push", remote, branch], { cwd: repoRoot, timeoutMs: 10 * 60 * 1000 });
+	if (result.code !== 0 && /no upstream branch/i.test(result.stderr)) {
+		result = await runGitOrThrow(["push", "-u", remote, branch], { cwd: repoRoot, timeoutMs: 10 * 60 * 1000 });
+	} else if (result.code !== 0) {
+		throw new Error((result.stderr || result.stdout || "Git push failed").trim());
+	}
+	await sendChunkedTrackedMessage(chatId, formatGitCommandResult(`Pushed ${branch} to ${remote}.`, repoRoot, result.stdout, result.stderr));
+}
+
+async function handleGitBranch(chatId, workspace, rawArguments) {
+	const repoRoot = await ensureActiveGitRepo(chatId, workspace);
+	if (!repoRoot) return;
+	const branchName = rawArguments.trim();
+	if (!branchName) {
+		await sendTrackedMessage(chatId, "Usage: /git-branch <branch_name>");
+		return;
+	}
+
+	let result = await runGit(["checkout", "-b", branchName], { cwd: repoRoot, timeoutMs: 60000 });
+	if (result.code !== 0 && /already exists/i.test(result.stderr)) {
+		result = await runGitOrThrow(["checkout", branchName], { cwd: repoRoot, timeoutMs: 60000 });
+	} else if (result.code !== 0) {
+		throw new Error((result.stderr || result.stdout || "Git branch command failed").trim());
+	}
+
+	await sendChunkedTrackedMessage(chatId, formatGitCommandResult(`Checked out branch ${branchName}.`, repoRoot, result.stdout, result.stderr));
+}
+
+async function handleGitCommit(chatId, workspace, rawArguments) {
+	const repoRoot = await ensureActiveGitRepo(chatId, workspace);
+	if (!repoRoot) return;
+
+	await runGitOrThrow(["add", "-A"], { cwd: repoRoot, timeoutMs: 5 * 60 * 1000 });
+	const stagedDiff = await runGitOrThrow(["diff", "--cached", "--stat"], { cwd: repoRoot, timeoutMs: 60000 });
+	const stagedPatch = await runGitOrThrow(["diff", "--cached", "--", "."], { cwd: repoRoot, timeoutMs: 60000 });
+	if (!stagedDiff.stdout.trim() && !stagedPatch.stdout.trim()) {
+		await sendTrackedMessage(chatId, "No changes to commit.");
+		return;
+	}
+
+	const providedMessage = rawArguments.trim();
+	let commitMessage = providedMessage;
+	if (!commitMessage) {
+		const status = await runGitOrThrow(["status", "--short"], { cwd: repoRoot, timeoutMs: 30000 });
+		const recentCommitsResult = await runGit(["log", "--oneline", "-5"], { cwd: repoRoot, timeoutMs: 30000 });
+		const branch = await getCurrentBranch(repoRoot);
+		commitMessage = await generateGitCommitMessage(workspace, {
+			projectName: workspace.projectName,
+			branch,
+			status: status.stdout,
+			diffStat: stagedDiff.stdout,
+			recentCommits: recentCommitsResult.code === 0
+				? recentCommitsResult.stdout.split("\n").map((line) => line.trim()).filter(Boolean)
+				: [],
+			diffPatch: "",
+		});
+	}
+
+	const commitResult = await runGitOrThrow(["commit", "-m", commitMessage], { cwd: repoRoot, timeoutMs: 5 * 60 * 1000 });
+	await sendChunkedTrackedMessage(chatId, formatGitCommandResult(`Committed changes with message: ${commitMessage}`, repoRoot, commitResult.stdout, commitResult.stderr));
+}
+
+async function stopAllDifitProcesses() {
+    const stops = [];
+
+    for (const [projectPath, difitProcess] of difitProcessesByProject.entries()) {
+        stops.push((async () => {
+            try {
+                difitProcess.kill("SIGKILL");
+            } catch (err) {
+                console.warn("Failed to stop difit process", {
+                    projectPath,
+                    message: err?.message,
+                });
+            }
+        })());
+    }
+
+    await Promise.allSettled(stops);
+    difitProcessesByProject.clear();
+}
+
+const OPENCODE_SERVER_PROCESS_PATTERNS = [
+    ".opencode serve",
+    "opencode serve",
+    "opencode-ai serve",
+];
+
+async function killProcessesByPatterns(patterns) {
+    const processIds = [...listMatchingProcessIds(patterns)];
+
+    await Promise.allSettled(processIds.map((pid) => new Promise((resolve) => {
+        try {
+            process.kill(Number(pid), "SIGKILL");
+        } catch (err) {
+            if (err?.code !== "ESRCH") {
+                console.warn("Failed to hard-kill process", {
+                    pid,
+                    message: err?.message,
+                });
+            }
+        }
+        resolve();
+    })));
+}
+
+function listMatchingProcessIds(patterns) {
+    const processIds = new Set();
+
+    for (const pattern of patterns) {
+        try {
+            const output = execSync(`pgrep -f ${JSON.stringify(pattern)} || true`, {
+                encoding: "utf8",
+            });
+            for (const line of output.split("\n")) {
+                const pid = line.trim();
+                if (pid) {
+                    processIds.add(pid);
+                }
+            }
+        } catch {}
+    }
+
+    return processIds;
+}
+
+async function killAllOpenCodeServers() {
+	if (SHARED_OPENCODE_MODE) {
+		await stopAllDifitProcesses();
+		clearGlobalOpenCodeState();
+		return {
+			matchedBefore: 0,
+			killed: 0,
+			stillRunning: 0,
+			sharedService: true,
+		};
+	}
+
+	const matchedBefore = listMatchingProcessIds(OPENCODE_SERVER_PROCESS_PATTERNS);
+
+    await projectInstanceManager.shutdown();
+    await stopAllDifitProcesses();
+
+    await killProcessesByPatterns(OPENCODE_SERVER_PROCESS_PATTERNS);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
+    const stillRunning = listMatchingProcessIds(OPENCODE_SERVER_PROCESS_PATTERNS);
+    const killed = [...matchedBefore].filter((pid) => !stillRunning.has(pid)).length;
+
+    clearGlobalOpenCodeState();
+
+    return {
+        matchedBefore: matchedBefore.size,
+        killed,
+        stillRunning: stillRunning.size,
+    };
 }
 
 async function postWorkspaceInteraction(workspace, sessionId, endpoint, payload) {
@@ -1944,12 +2425,21 @@ async function waitForWorkspaceHealthy(baseUrl, timeoutMs) {
 }
 
 async function ensureWorkspaceRuntime(projectPath) {
-    const instance = await projectInstanceManager.launch(projectPath);
+	const runtime = ensureWorkspaceRecord(projectPath);
 
-    const runtime = ensureWorkspaceRecord(projectPath);
-    runtime.baseUrl = instance.baseUrl;
-    runtime.status = instance.status;
-    runtime.lastUsedAt = Date.now();
+	if (SHARED_OPENCODE_MODE) {
+		await waitForWorkspaceHealthy(SHARED_OPENCODE_BASE_URL, WORKSPACE_HEALTH_TIMEOUT_MS);
+		runtime.baseUrl = SHARED_OPENCODE_BASE_URL;
+		runtime.status = "ready";
+		runtime.lastUsedAt = Date.now();
+		delete runtime.version;
+		return runtime;
+	}
+
+	const instance = await projectInstanceManager.launch(projectPath);
+	runtime.baseUrl = instance.baseUrl;
+	runtime.status = instance.status;
+	runtime.lastUsedAt = Date.now();
 
     if (instance.version) {
         runtime.version = instance.version;
@@ -2366,9 +2856,9 @@ async function syncTelegramCommands() {
     }
 
     const mergedCommands = [...commandMap.values()].slice(0, 100);
-    await bot.setMyCommands(mergedCommands);
-    await bot.setMyCommands(mergedCommands, { scope: { type: "all_private_chats" } });
-    await bot.setMyCommands(mergedCommands, { scope: { type: "all_group_chats" } });
+    await bot.api.setMyCommands(mergedCommands);
+    await bot.api.setMyCommands(mergedCommands, { scope: { type: "all_private_chats" } });
+    await bot.api.setMyCommands(mergedCommands, { scope: { type: "all_group_chats" } });
 
     console.log(`Synced ${mergedCommands.length} Telegram commands`);
 }
@@ -2431,7 +2921,6 @@ async function liveSyncTelegramChatsFromSessions() {
     try {
         for (const [chatProjectKey, sessionId] of sessionByChatProject.entries()) {
             if (typeof sessionId !== "string" || sessionId.trim() === "") continue;
-            if (liveSyncInFlightByChatProject.has(chatProjectKey)) continue;
 
             const parsed = parseChatProjectKey(chatProjectKey);
             if (!parsed) continue;
@@ -2439,14 +2928,10 @@ async function liveSyncTelegramChatsFromSessions() {
             const { chatId, projectPath } = parsed;
             if (activeProjectPathByChat.get(chatId) !== projectPath) continue;
 
-            liveSyncInFlightByChatProject.add(chatProjectKey);
+            const runtime = workspaceRuntimeByProjectPath.get(projectPath);
+            if (!runtime || !runtime.baseUrl || runtime.status !== "ready") continue;
 
             try {
-                const runtime = await ensureWorkspaceRuntime(projectPath);
-                if (!runtime || !runtime.baseUrl || runtime.status !== "ready") {
-                    continue;
-                }
-
                 const rawMessages = await fetchSessionMessages(runtime, sessionId);
                 if (rawMessages.length === 0) continue;
 
@@ -2469,7 +2954,7 @@ async function liveSyncTelegramChatsFromSessions() {
                     const formatted = formatSessionMessageForTelegram(message);
                     if (!formatted) continue;
 
-                    const chunks = splitForTelegram(formatted);
+                    const chunks = splitTelegramMessageContent(formatted);
                     for (const chunk of chunks) {
                         await sendTrackedMessage(chatId, chunk);
                     }
@@ -2484,8 +2969,6 @@ async function liveSyncTelegramChatsFromSessions() {
                     status: err?.response?.status,
                     message: err?.message,
                 });
-            } finally {
-                liveSyncInFlightByChatProject.delete(chatProjectKey);
             }
         }
     } finally {
@@ -2504,42 +2987,6 @@ function getActiveProjectDescription(chatId) {
     if (!projectPath) return null;
     const project = parseProjectFromPath(projectPath);
     return `${project.label}/${project.name}`;
-}
-
-
-function formatRuntimeDebug(chatId, workspace) {
-    const projectPath = workspace?.projectPath;
-    const chatProjectKey = projectPath ? getChatProjectKey(chatId, projectPath) : null;
-    const runtime = projectPath ? workspaceRuntimeByProjectPath.get(projectPath) : null;
-    const instance = projectPath ? projectInstanceManager.get(projectPath) : null;
-    const tracked = trackedMessageIdsByChat.get(chatId)?.length ?? 0;
-    const seenKeys = chatProjectKey ? (seenSessionMessageKeysByChatProject.get(chatProjectKey)?.length ?? 0) : 0;
-    const sessionId = chatProjectKey ? sessionByChatProject.get(chatProjectKey) : null;
-    const mode = workspace ? getSelectedMode(chatId, workspace) : null;
-
-    const lines = [
-        "Debug runtime",
-        `chatId: ${chatId}`,
-        `projectPath: ${projectPath ?? "(none)"}`,
-        `workspaceStatus: ${runtime?.status ?? workspace?.status ?? "unknown"}`,
-        `baseUrl: ${runtime?.baseUrl ?? workspace?.baseUrl ?? "(none)"}`,
-        `sessionId: ${sessionId ?? "(none)"}`,
-        `mode: ${mode ?? "default"}`,
-        `liveSyncGlobalLock: ${liveSyncInFlight ? "on" : "off"}`,
-        `liveSyncChatLock: ${chatProjectKey && liveSyncInFlightByChatProject.has(chatProjectKey) ? "on" : "off"}`,
-        `trackedMessageIds: ${tracked}`,
-        `seenSessionKeys: ${seenKeys}`,
-    ];
-
-    if (instance) {
-        lines.push(`instanceStatus: ${instance.status ?? "unknown"}`);
-        lines.push(`instancePort: ${instance.port ?? "n/a"}`);
-        lines.push(`instancePid: ${instance.pid ?? "n/a"}`);
-    } else {
-        lines.push("instanceStatus: (no in-memory instance)");
-    }
-
-    return ["```text", ...lines, "```"].join("\n");
 }
 
 function getSelectedMode(chatId, workspace) {
@@ -2661,17 +3108,15 @@ async function startDifitForProject(projectPath) {
         return null;
     }
 
-    const existing = difitProcessesByProject.get(projectPath);
-    if (existing?.process && existing.process.exitCode === null && existing.process.signalCode === null && existing.url) {
-        return existing.url;
-    }
-
-    if (existing?.process) {
+    const existingProcess = difitProcessesByProject.get(projectPath);
+    if (existingProcess) {
         try {
-            existing.process.kill("SIGKILL");
+            existingProcess.kill("SIGKILL");
         } catch {}
         difitProcessesByProject.delete(projectPath);
     }
+
+    await killProcessByPort(DIFIT_PORT);
 
     return new Promise((resolve) => {
         let started = false;
@@ -2685,20 +3130,19 @@ async function startDifitForProject(projectPath) {
         try {
             const difit = spawn("npx", ["difit", ".", "--host", DIFIT_BIND_HOST, "--port", String(DIFIT_PORT), "--no-open", "--keep-alive", "--include-untracked"], {
                 cwd: projectPath,
-                shell: false,
+                shell: true,
             });
 
             const checkForPort = (output) => {
                 console.log("difit output", { projectPath, output: output.slice(0, 200) });
-                const urlMatch = output.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[a-zA-Z0-9.-]+):(\d+)/);
-                if (urlMatch && !started) {
+                const portMatch = output.match(/http:\/\/localhost:(\d+)/);
+                if (portMatch && !started) {
                     started = true;
                     clearTimeout(timeout);
+                    difitProcessesByProject.set(projectPath, difit);
                     const localIp = getLocalIpAddress();
-                    const actualPort = urlMatch[1];
-                    const url = `http://${localIp}:${actualPort}`;
-                    difitProcessesByProject.set(projectPath, { process: difit, url, port: Number(actualPort), startedAt: Date.now() });
-                    resolve(url);
+                    const actualPort = portMatch[1];
+                    resolve(`http://${localIp}:${actualPort}`);
                 }
             };
 
@@ -2734,7 +3178,11 @@ async function startDifitForProject(projectPath) {
 }
 
 async function sendReplyWithDifit(chatId, reply, workspace) {
-    await sendTrackedMessage(chatId, formatAssistantReplyForTelegram(reply));
+    const formattedReply = formatAssistantReplyForTelegram(reply);
+    const chunks = splitTelegramMessageContent(formattedReply);
+    for (const chunk of chunks) {
+        await sendTrackedMessage(chatId, chunk);
+    }
 
     if (workspace?.projectPath) {
         const difitUrl = await startDifitForProject(workspace.projectPath);
@@ -2744,7 +3192,258 @@ async function sendReplyWithDifit(chatId, reply, workspace) {
     }
 }
 
-bot.on("message", async (msg) => {
+async function checkOpenCodeAuth(workspace) {
+    try {
+        const res = await axios.get(`${workspace.baseUrl}/global/health`, {
+            timeout: 5000,
+            validateStatus: () => true,
+        });
+
+        if (res.status === 200 && res.data) {
+            if (res.data.authenticated === false) {
+                return { ok: false, reason: "not_authenticated" };
+            }
+
+            if (res.data.providers && Array.isArray(res.data.providers)) {
+                const hasValidProvider = res.data.providers.some(
+                    p => p.configured === true || p.authenticated === true
+                );
+                if (!hasValidProvider) {
+                    return { ok: false, reason: "no_provider_configured" };
+                }
+            }
+
+            return { ok: true };
+        }
+
+        return { ok: false, reason: "unhealthy" };
+    } catch (err) {
+        return { ok: false, reason: "unreachable", error: err?.message };
+    }
+}
+
+function isAuthError(err) {
+    if (!err) return false;
+
+    const message = (err.message || "").toLowerCase();
+    const status = err?.response?.status;
+    const responseData = err?.response?.data;
+
+    if (status === 401) return true;
+
+    const authKeywords = [
+        "not authenticated",
+        "unauthorized",
+        "invalid api key",
+        "api key not found",
+        "authentication failed",
+        "auth required",
+        "no provider configured",
+        "provider not configured",
+        "missing credentials",
+    ];
+
+    if (authKeywords.some(keyword => message.includes(keyword))) {
+        return true;
+    }
+
+    if (responseData) {
+        const responseText = typeof responseData === "string"
+            ? responseData.toLowerCase()
+            : JSON.stringify(responseData).toLowerCase();
+
+        if (authKeywords.some(keyword => responseText.includes(keyword))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+async function sendAuthRequiredMessage(chatId) {
+	const message = `🔐 **Authentication Required**
+
+You need to authenticate your AI provider to use this bot.
+
+**To fix this:**
+1. Attach to your OpenCode Docker container:
+   \`docker exec -it <container_name> /bin/bash\`
+
+2. Run the authentication command for your preferred provider:
+   \`opencode auth login\`
+
+3. Follow the prompts to complete authentication
+
+4. Once authenticated, send your message again
+
+**Note:** Authentication is stored within the container. If you restart the container, you may need to re-authenticate.`;
+
+	await sendTrackedMessage(chatId, message);
+}
+
+function isModelError(err) {
+	if (!err) return false;
+
+	const message = (err.message || "").toLowerCase();
+	const status = err?.response?.status;
+	const responseData = err?.response?.data;
+
+	const modelKeywords = [
+		"model not found",
+		"provider model not found",
+		"providerModelNotFoundError",
+		"invalid model",
+		"model id not found",
+		"model is not valid",
+		"no model configured",
+		"unknown model",
+	];
+
+	if (modelKeywords.some(keyword => message.includes(keyword))) {
+		return true;
+	}
+
+	if (responseData) {
+		const responseText = typeof responseData === "string"
+			? responseData.toLowerCase()
+			: JSON.stringify(responseData).toLowerCase();
+
+		if (modelKeywords.some(keyword => responseText.includes(keyword))) {
+			return true;
+		}
+
+		if (responseText.includes("providerid") && responseText.includes("modelid")) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+async function sendModelErrorMessage(chatId, errorDetails = null) {
+	let message = `🤖 **Model Configuration Error**
+
+Your AI model is not properly configured or the model ID is invalid.
+
+**To fix this:**
+1. Attach to your OpenCode Docker container:
+   \`docker exec -it opencode /bin/bash\`
+
+2. Check your current model configuration:
+   \`opencode config get model\`
+
+3. Set a valid model (examples):
+   \`opencode config set model claude-3-5-sonnet-20241022\`
+   \`opencode config set model gpt-4o\`
+   \`opencode config set model gemini-1.5-pro\`
+
+4. Or use the /models command in Telegram to see available models and switch
+
+5. Once configured, send your message again`;
+
+	if (errorDetails?.providerID && errorDetails?.modelID) {
+		message += `\n\n**Error details:**
+Provider: ${errorDetails.providerID}
+Model: ${errorDetails.modelID}`;
+	}
+
+	await sendTrackedMessage(chatId, message);
+}
+
+const MODEL_CACHE_MS = 2 * 60 * 1000;
+const modelCacheByProjectPath = new Map();
+const selectedModelByChatProject = new Map();
+
+async function loadAvailableModels(workspace) {
+	if (!workspace?.projectPath || !workspace?.baseUrl) return [];
+
+	const cached = modelCacheByProjectPath.get(workspace.projectPath);
+	if (cached && Date.now() - cached.updatedAt < MODEL_CACHE_MS) {
+		return cached.models;
+	}
+
+	try {
+		const res = await axios.get(`${workspace.baseUrl}/model`, { timeout: 10000 });
+		const rawModels = Array.isArray(res?.data)
+			? res.data
+			: Array.isArray(res?.data?.models)
+				? res.data.models
+				: [];
+
+		const models = rawModels
+			.filter((model) => model && typeof model === "object")
+			.filter((model) => typeof model.id === "string" && model.id.trim() !== "")
+			.map((model) => ({
+				id: model.id.trim(),
+				name: typeof model.name === "string" ? model.name.trim() : model.id.trim(),
+				provider: typeof model.provider === "string" ? model.provider.trim() : "",
+				description: typeof model.description === "string" ? model.description.trim() : "",
+			}));
+
+		modelCacheByProjectPath.set(workspace.projectPath, {
+			updatedAt: Date.now(),
+			models,
+		});
+
+		return models;
+	} catch (err) {
+		console.error("Failed loading OpenCode models", {
+			projectPath: workspace.projectPath,
+			baseUrl: workspace.baseUrl,
+			status: err?.response?.status,
+			message: err?.message,
+		});
+		return [];
+	}
+}
+
+function getSelectedModel(chatId, workspace) {
+	if (!workspace?.projectPath) return null;
+	return selectedModelByChatProject.get(getChatProjectKey(chatId, workspace.projectPath)) ?? null;
+}
+
+function setSelectedModel(chatId, workspace, modelId) {
+	if (!workspace?.projectPath) return;
+	const key = getChatProjectKey(chatId, workspace.projectPath);
+	if (typeof modelId === "string" && modelId.trim() !== "") {
+		selectedModelByChatProject.set(key, modelId.trim());
+		return;
+	}
+	selectedModelByChatProject.delete(key);
+}
+
+function withSelectedModel(chatId, workspace, payload) {
+	const model = getSelectedModel(chatId, workspace);
+	if (!model) return payload;
+	return { ...payload, model };
+}
+
+function getModelButtons(models, currentModel) {
+	const rows = [];
+	for (let i = 0; i < models.length; i += 2) {
+		const row = [];
+		const left = models[i];
+		const right = models[i + 1];
+
+		if (left) {
+			const label = left.id === currentModel ? `✅ ${left.name}` : left.name;
+			row.push({ text: label.slice(0, 30), callback_data: `model:${encodeURIComponent(left.id)}` });
+		}
+
+		if (right) {
+			const label = right.id === currentModel ? `✅ ${right.name}` : right.name;
+			row.push({ text: label.slice(0, 30), callback_data: `model:${encodeURIComponent(right.id)}` });
+		}
+
+		if (row.length > 0) rows.push(row);
+	}
+
+	return rows;
+}
+
+bot.on("message", async (ctx) => {
+    const msg = ctx.message;
+    if (!msg) return;
     const chatId = msg.chat.id;
     trackMessageId(chatId, msg.message_id);
     const text = msg.text ?? msg.caption;
@@ -2758,13 +3457,24 @@ bot.on("message", async (msg) => {
         const isCommand = firstToken.startsWith("/");
 
         let workspace = null;
-        const telegramCommand = isCommand ? firstToken.slice(1).split("@")[0].toLowerCase().replace(/-/g, "_") : "";
-        const canRunWithoutProject = ["projects", "help", "commandsync"].includes(telegramCommand);
+		const rawTelegramCommand = isCommand ? firstToken.slice(1).split("@")[0].toLowerCase().replace(/-/g, "_") : "";
+		const telegramCommand = rawTelegramCommand === "project" ? "projects" : rawTelegramCommand;
+		const canRunWithoutProject = ["projects", "help", "commandsync", "close", "git_clone"].includes(telegramCommand);
 
         if (!canRunWithoutProject) {
             workspace = await getWorkspaceForChat(chatId);
             if (!workspace) {
                 await sendTrackedMessage(chatId, "Select a project first with /projects.");
+                return;
+            }
+
+            const authCheck = await checkOpenCodeAuth(workspace);
+            if (!authCheck.ok) {
+                console.warn("OpenCode auth check failed", {
+                    projectPath: workspace.projectPath,
+                    reason: authCheck.reason,
+                });
+                await sendAuthRequiredMessage(chatId);
                 return;
             }
         }
@@ -2778,26 +3488,45 @@ bot.on("message", async (msg) => {
                 return;
             }
 
-            if (telegramCommand === "help") {
-                const commands = [...new Set([...BUILTIN_TELEGRAM_COMMANDS.map((c) => c.command), ...telegramCommandMap.keys()])];
-                if (commands.includes("clear_sessions")) {
-                    commands.push("clear-sessions");
-                }
+			if (telegramCommand === "help") {
+				const commands = [...new Set([...BUILTIN_TELEGRAM_COMMANDS.map((c) => c.command), ...telegramCommandMap.keys()])];
+				if (commands.includes("clear_sessions")) {
+					commands.push("clear-sessions");
+				}
+				for (const command of [...commands]) {
+					if (command.startsWith("git_")) {
+						commands.push(command.replace(/_/g, "-"));
+					}
+				}
 
-                const helpText = [...new Set(commands)]
-                    .sort()
+				const helpText = [...new Set(commands)]
+					.sort()
                     .map((name) => `/${name}`)
                     .join("\n");
                 await sendTrackedMessage(chatId, `Available commands:\n${helpText}`);
                 return;
             }
 
-            if (telegramCommand === "projects") {
-                const directory = await loadProjectDirectory(chatId);
-                if (directory.items.length === 0) {
-                    await sendTrackedMessage(chatId, "No projects found in Desktop/Petar or Desktop/Profico.");
-                    return;
-                }
+			if (telegramCommand === "close") {
+				const killResult = await killAllOpenCodeServers();
+				clearChatState(chatId);
+				await syncTelegramCommands();
+				const closeMessage = killResult.sharedService
+					? "Cleared the active project and local bot runtime state. The shared OpenCode service is still managed by Docker Compose. Use /project to pick a project again."
+					: `Closed OpenCode servers. Killed ${killResult.killed} server process(es) out of ${killResult.matchedBefore} matched. Cleared the active project. Use /project to pick a project again.`;
+				await sendTrackedMessage(
+					chatId,
+					closeMessage,
+				);
+				return;
+			}
+
+			if (telegramCommand === "projects") {
+				const directory = await loadProjectDirectory(chatId);
+				if (directory.items.length === 0) {
+					await sendTrackedMessage(chatId, "No projects found.");
+					return;
+				}
 
                 await sendTrackedMessage(chatId, "Projects (tap to switch):", {
                     reply_markup: {
@@ -2894,6 +3623,66 @@ bot.on("message", async (msg) => {
                 return;
             }
 
+            if (telegramCommand === "models") {
+                const models = await loadAvailableModels(workspace);
+                if (models.length === 0) {
+                    await sendTrackedMessage(chatId, "No models found from OpenCode /model endpoint. You may need to configure a model manually via the container.");
+                    return;
+                }
+
+                const wanted = trimmed.slice(firstToken.length).trim();
+                if (wanted) {
+                    const selected = models.find((model) => model.id.toLowerCase() === wanted.toLowerCase());
+                    if (!selected) {
+                        const names = models.map((model) => model.id).join(", ");
+                        await sendTrackedMessage(chatId, `Model not found. Available: ${names}`);
+                        return;
+                    }
+
+                    setSelectedModel(chatId, workspace, selected.id);
+                    await sendTrackedMessage(chatId, `Model set to ${selected.name} (${selected.id}).\n\nNote: This will be used for new messages. The model setting may need to be persisted in OpenCode config if you want it to survive restarts.`);
+                    return;
+                }
+
+                const currentModel = getSelectedModel(chatId, workspace);
+                const modelList = models.map(m => `${m.id === currentModel ? '✅ ' : ''}${m.name} (${m.id})${m.provider ? ` - ${m.provider}` : ''}`).join('\n');
+                
+                await sendTrackedMessage(chatId, `Select AI Model\nCurrent: ${currentModel ?? "default (from OpenCode config)"}\n\nAvailable models:\n${modelList}\n\nUse /models <model-id> to select, or tap below:`, {
+                    reply_markup: {
+                        inline_keyboard: getModelButtons(models, currentModel),
+                    },
+                });
+                return;
+            }
+
+            if (telegramCommand === "debug") {
+                const health = await checkOpenCodeAuth(workspace);
+                const models = await loadAvailableModels(workspace);
+                const modes = await loadSelectableModes(workspace);
+                const currentModel = getSelectedModel(chatId, workspace);
+                const currentMode = getSelectedMode(chatId, workspace);
+                
+                let configInfo = "🔍 **OpenCode Debug Info**\n\n";
+                
+                configInfo += `**Server Health:**\n`;
+                configInfo += `- Status: ${health.ok ? "✅ Healthy" : "❌ Unhealthy"}\n`;
+                configInfo += `- Reason: ${health.reason || "N/A"}\n`;
+                configInfo += `- Base URL: ${workspace.baseUrl}\n\n`;
+                
+                configInfo += `**Current Session:**\n`;
+                configInfo += `- Model: ${currentModel || "Not set (using OpenCode default)"}\n`;
+                configInfo += `- Mode: ${currentMode || "default"}\n\n`;
+                
+                configInfo += `**Available Models:** ${models.length > 0 ? models.map(m => m.id).join(", ") : "None (endpoint unavailable)"}\n\n`;
+                configInfo += `**Available Modes:** ${modes.length > 0 ? modes.map(m => m.name).join(", ") : "None (endpoint unavailable)"}\n\n`;
+                
+                configInfo += `**Config Directory:** /root/.config/opencode\n`;
+                configInfo += `**Project Path:** ${workspace.projectPath}\n`;
+                
+                await sendTrackedMessage(chatId, configInfo);
+                return;
+            }
+
             if (telegramCommand === "refresh") {
                 const current = await getOrCreateSession(chatId, workspace, {
                     allowCreate: false,
@@ -2924,7 +3713,7 @@ bot.on("message", async (msg) => {
                 return;
             }
 
-            if (telegramCommand === "stop") {
+			if (telegramCommand === "stop") {
                 const sessionKey = getChatProjectKey(chatId, workspace.projectPath);
                 const currentSessionId = sessionByChatProject.get(sessionKey);
 
@@ -2984,10 +3773,47 @@ bot.on("message", async (msg) => {
                 } else {
                     await sendTrackedMessage(chatId, "⚠️ No active execution found to stop.");
                 }
-                return;
-            }
+				return;
+			}
 
-            const sessionId = await getOrCreateSession(chatId, workspace);
+			if (telegramCommand === "git_clone") {
+				const argumentsText = trimmed.slice(firstToken.length).trim();
+				await handleGitClone(chatId, argumentsText);
+				return;
+			}
+
+			if (telegramCommand === "git_fetch") {
+				const argumentsText = trimmed.slice(firstToken.length).trim();
+				await handleGitFetch(chatId, workspace, argumentsText);
+				return;
+			}
+
+			if (telegramCommand === "git_pull") {
+				const argumentsText = trimmed.slice(firstToken.length).trim();
+				await handleGitPull(chatId, workspace, argumentsText);
+				return;
+			}
+
+			if (telegramCommand === "git_push") {
+				const argumentsText = trimmed.slice(firstToken.length).trim();
+				await handleGitPush(chatId, workspace, argumentsText);
+				return;
+			}
+
+			if (telegramCommand === "git_branch") {
+				const argumentsText = trimmed.slice(firstToken.length).trim();
+				await handleGitBranch(chatId, workspace, argumentsText);
+				return;
+			}
+
+			if (telegramCommand === "git_commit") {
+				const argumentsText = trimmed.slice(firstToken.length).trim();
+				await handleGitCommit(chatId, workspace, argumentsText);
+				return;
+			}
+
+			const sessionId = await getOrCreateSession(chatId, workspace);
+			await tuiSelectSession(workspace, sessionId);
 
             if (telegramCommand === "run") {
                 const prompt = trimmed.slice(firstToken.length).trim();
@@ -2998,7 +3824,8 @@ bot.on("message", async (msg) => {
 
                 const interaction = await runWorkspaceInteraction(workspace, sessionId, "message", {
                     ...withSelectedMode(chatId, workspace, {}),
-                    parts: [{ type: "text", text: prompt }],
+                    ...withSelectedModel(chatId, workspace, {}),
+                    parts: [{ type: "text", text: appendTelegramUpstreamFormattingGuide(prompt) }],
                 });
                 workspace = interaction.workspace;
                 res = interaction.response;
@@ -3014,6 +3841,7 @@ bot.on("message", async (msg) => {
 
                 const interaction = await runWorkspaceInteraction(workspace, sessionId, "command", {
                     ...withSelectedMode(chatId, workspace, {}),
+                    ...withSelectedModel(chatId, workspace, {}),
                     command,
                     arguments: argumentsText,
                 });
@@ -3027,9 +3855,11 @@ bot.on("message", async (msg) => {
             }
         } else {
             const sessionId = await getOrCreateSession(chatId, workspace);
+            await tuiSelectSession(workspace, sessionId);
             const interaction = await runWorkspaceInteraction(workspace, sessionId, "message", {
                 ...withSelectedMode(chatId, workspace, {}),
-                parts: [{ type: "text", text }],
+                ...withSelectedModel(chatId, workspace, {}),
+                parts: [{ type: "text", text: appendTelegramUpstreamFormattingGuide(text) }],
             });
             workspace = interaction.workspace;
             res = interaction.response;
@@ -3073,19 +3903,35 @@ bot.on("message", async (msg) => {
             data: err?.response?.data,
         });
 
-        let errorMessage = "⚠️ OpenCode server error";
+        if (isAuthError(err)) {
+            await sendAuthRequiredMessage(chatId);
+            return;
+        }
 
-        const message = (err?.message || "").toLowerCase();
-        if (message.includes("timeout") || message.includes("aborted")) {
-            errorMessage = "⏱️ Request timed out. The operation may still be running - check OpenCode TUI or try again.";
-        } else if (message.includes("connection") || message.includes("econnrefused")) {
-            errorMessage = "🔌 Connection lost to OpenCode server. It may have crashed. Try: opencode-telegram kill-all && npx --yes .";
-        } else if (message.includes("session") && message.includes("lost")) {
-            errorMessage = "🔄 Session was lost after server restart. Please retry your message.";
-        } else if (message.includes("unresponsive")) {
-            errorMessage = "💀 Server became unresponsive. Try: opencode-telegram kill-all && npx --yes .";
-        } else if (message.includes("restart")) {
-            errorMessage = err.message;
+        if (isModelError(err)) {
+            const errorDetails = err?.response?.data?.data || {};
+            await sendModelErrorMessage(chatId, errorDetails);
+            return;
+        }
+
+        let errorMessage = "⚠️ OpenCode server error";
+        const rawMessage = typeof err?.message === "string" ? err.message.trim() : "";
+        if (rawMessage.startsWith("Git command failed") || rawMessage.startsWith("Git command timed out") || rawMessage.startsWith("Clone ") || rawMessage.startsWith("Current branch has no upstream")) {
+            errorMessage = truncateText(rawMessage, 3500);
+        } else {
+
+            const message = (err?.message || "").toLowerCase();
+            if (message.includes("timeout") || message.includes("aborted")) {
+                errorMessage = "⏱️ Request timed out. The operation may still be running - check OpenCode TUI or try again.";
+            } else if (message.includes("connection") || message.includes("econnrefused")) {
+                errorMessage = "🔌 Connection lost to OpenCode server. It may have crashed. Try: opencode-telegram kill-all && npx --yes .";
+            } else if (message.includes("session") && message.includes("lost")) {
+                errorMessage = "🔄 Session was lost after server restart. Please retry your message.";
+            } else if (message.includes("unresponsive")) {
+                errorMessage = "💀 Server became unresponsive. Try: opencode-telegram kill-all && npx --yes .";
+            } else if (message.includes("restart")) {
+                errorMessage = err.message;
+            }
         }
 
         await sendTrackedMessage(chatId, errorMessage);
@@ -3094,13 +3940,14 @@ bot.on("message", async (msg) => {
     }
 });
 
-bot.on("callback_query", async (query) => {
+bot.on("callback_query", async (ctx) => {
+    const query = ctx.callbackQuery;
     const chatId = query?.message?.chat?.id;
     const data = query?.data ?? "";
 
     console.log("Callback received", { chatId, data, hasMessage: !!query?.message });
 
-    if (!chatId || (!data.startsWith("switch:") && !data.startsWith("project:") && !data.startsWith("mode:"))) {
+    if (!chatId || (!data.startsWith("switch:") && !data.startsWith("project:") && !data.startsWith("mode:") && !data.startsWith("model:"))) {
         console.log("Callback ignored - invalid chatId or data", { chatId, data });
         await answerCallbackQuerySafely(query?.id);
         return;
@@ -3125,24 +3972,43 @@ bot.on("callback_query", async (query) => {
                 console.log("Switching session", { selector, workspace: workspace.projectName });
                 return await switchSessionBySelector(chatId, workspace, selector);
               })()
-              : await (async () => {
-                const projectPath = getActiveProjectPath(chatId);
-                if (!projectPath) {
-                    return { ok: false, message: "Select a project first with /projects." };
-                }
+              : data.startsWith("model:")
+                ? await (async () => {
+                  const projectPath = getActiveProjectPath(chatId);
+                  if (!projectPath) {
+                      return { ok: false, message: "Select a project first with /projects." };
+                  }
 
-                const workspace = await ensureWorkspaceRuntime(projectPath);
-                callbackWorkspace = workspace;
-                const requested = decodeURIComponent(data.slice("mode:".length));
-                const modes = await loadSelectableModes(workspace);
-                const selected = modes.find((mode) => mode.name === requested);
-                if (!selected) {
-                    return { ok: false, message: "Mode no longer available. Run /mode again." };
-                }
+                  const workspace = await ensureWorkspaceRuntime(projectPath);
+                  callbackWorkspace = workspace;
+                  const requested = decodeURIComponent(data.slice("model:".length));
+                  const models = await loadAvailableModels(workspace);
+                  const selected = models.find((model) => model.id === requested);
+                  if (!selected) {
+                      return { ok: false, message: "Model no longer available. Run /models again." };
+                  }
 
-                setSelectedMode(chatId, workspace, selected.name);
-                return { ok: true, message: `Mode set to ${selected.name}.` };
-              })();
+                  setSelectedModel(chatId, workspace, selected.id);
+                  return { ok: true, message: `Model set to ${selected.name} (${selected.id}).` };
+                })()
+                : await (async () => {
+                  const projectPath = getActiveProjectPath(chatId);
+                  if (!projectPath) {
+                      return { ok: false, message: "Select a project first with /projects." };
+                  }
+
+                  const workspace = await ensureWorkspaceRuntime(projectPath);
+                  callbackWorkspace = workspace;
+                  const requested = decodeURIComponent(data.slice("mode:".length));
+                  const modes = await loadSelectableModes(workspace);
+                  const selected = modes.find((mode) => mode.name === requested);
+                  if (!selected) {
+                      return { ok: false, message: "Mode no longer available. Run /mode again." };
+                  }
+
+                  setSelectedMode(chatId, workspace, selected.name);
+                  return { ok: true, message: `Mode set to ${selected.name}.` };
+                })();
 
         console.log("Callback result", { ok: result?.ok, message: result?.message?.slice(0, 50) });
 
@@ -3170,17 +4036,26 @@ bot.on("callback_query", async (query) => {
     }
 });
 
-bot.on("polling_error", (err) => {
-    console.error("Telegram polling error", {
-        code: err?.code,
-        message: err?.message,
-        description: err?.response?.body?.description,
+bot.catch((err) => {
+    const details = getTelegramErrorDetails(err);
+    console.error("Telegram update handling failed", {
+        ...details,
+        updateId: err?.ctx?.update?.update_id,
+        chatId: err?.ctx?.chat?.id,
     });
 });
 
 process.on("unhandledRejection", (reason) => {
     console.error("Unhandled promise rejection", reason);
 });
+
+function startTelegramBot() {
+    bot.start().catch((err) => {
+        console.error("Failed to start Telegram polling", getTelegramErrorDetails(err));
+    });
+}
+
+startTelegramBot();
 
 syncTelegramCommands().catch((err) => {
     console.error("Failed to sync Telegram commands", err?.message ?? err);
@@ -3205,6 +4080,12 @@ async function gracefulShutdown(signal) {
     isShuttingDown = true;
 
     console.log(`Received ${signal}, shutting down gracefully...`);
+
+    try {
+        await bot.stop();
+    } catch (err) {
+        console.error("Error stopping Telegram bot:", err?.message);
+    }
 
     try {
         await projectInstanceManager.shutdown();

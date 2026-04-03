@@ -1,7 +1,11 @@
 FROM node:20
 
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+
 RUN npm install -g opencode-ai
+
+COPY entrypoint-opencode.sh /usr/local/bin/entrypoint-opencode.sh
 
 EXPOSE 62771
 
-CMD opencode serve --hostname 0.0.0.0 --port 62771
+ENTRYPOINT ["/usr/local/bin/entrypoint-opencode.sh"]
