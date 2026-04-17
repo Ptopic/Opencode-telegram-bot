@@ -6,6 +6,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { createConnection } from "node:net";
+import { listProjects } from "./commands/projects.js";
+import {
+    listSessionsCommand,
+    switchSessionCommand,
+    newSessionCommand,
+} from "./commands/session.js";
+import { sendPromptCommand } from "./commands/send.js";
+import { stopCommand } from "./commands/stop.js";
+import { setModeCommand } from "./commands/mode.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -543,6 +552,16 @@ async function runKillAll() {
 }
 
 const command = process.argv[2];
+const args = process.argv.slice(3);
+
+// Parse global --project <path> flag (used by send, stop, mode)
+function parseProjectFlag(argList) {
+    const idx = argList.findIndex((a) => a === "--project");
+    if (idx >= 0 && argList[idx + 1] !== undefined) {
+        return { projectPath: argList[idx + 1], remaining: argList.filter((_, i) => i !== idx && i !== idx + 1) };
+    }
+    return { projectPath: undefined, remaining: argList };
+}
 
 if (command === "dev" || !command) {
     if (!process.env.TELEGRAM_TOKEN) {
@@ -571,5 +590,55 @@ if (command === "kill-all") {
     process.exit(exitCode);
 }
 
+// ── New subcommands ───────────────────────────────────────────────────────────
+if (command === "projects") {
+    const sub = args[0];
+    if (sub === "list" || !sub) {
+        await listProjects();
+    } else {
+        console.error(`Unknown 'projects' subcommand: ${sub}`);
+        console.error("Usage: opencode-telegram projects list");
+        process.exit(1);
+    }
+    process.exit(0);
+}
+
+if (command === "session" || command === "sessions") {
+    const sub = args[0];
+    const subArgs = args.slice(1);
+    const { projectPath, remaining } = parseProjectFlag(subArgs);
+
+    if (sub === "list") {
+        await listSessionsCommand(projectPath ?? remaining[0]);
+    } else if (sub === "switch") {
+        await switchSessionCommand(remaining[0], remaining[1]);
+    } else if (sub === "new") {
+        await newSessionCommand(projectPath ?? remaining[0]);
+    } else {
+        console.error("Usage: opencode-telegram session list|switch|new [--project <path>]");
+        process.exit(1);
+    }
+    process.exit(0);
+}
+
+if (command === "send") {
+    const { projectPath, remaining } = parseProjectFlag(args);
+    await sendPromptCommand(remaining.join(" "), projectPath);
+    process.exit(0);
+}
+
+if (command === "stop") {
+    const { projectPath } = parseProjectFlag(args);
+    await stopCommand(projectPath);
+    process.exit(0);
+}
+
+if (command === "mode") {
+    const { projectPath, remaining } = parseProjectFlag(args);
+    await setModeCommand(remaining[0], projectPath);
+    process.exit(0);
+}
+
+// ── Default: start Telegram bot ──────────────────────────────────────────────
 const exitCode = await runManagedMode();
 process.exit(exitCode);
