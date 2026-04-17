@@ -15,6 +15,7 @@ import {
 import { sendPromptCommand } from "./commands/send.js";
 import { stopCommand } from "./commands/stop.js";
 import { setModeCommand } from "./commands/mode.js";
+import { helpCommand } from "./commands/help.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -636,6 +637,11 @@ if (command === "stop") {
 if (command === "mode") {
     const { projectPath, remaining } = parseProjectFlag(args);
     await setModeCommand(remaining[0], projectPath);
+    process.exit(0);
+}
+
+if (command === "help") {
+    helpCommand();
     process.exit(0);
 }
 
