@@ -5,59 +5,66 @@ description: Use when Petar wants to control OpenCode on his Mac via the opencod
 
 # OpenCode CLI Skill
 
-Instructions for using the `@opencode-telegram/cli` package to interact with Petar's OpenCode instances on his Mac.
+Instructions for using the `@opencode-telegram/cli` to interact with Petar's OpenCode instances on his Mac.
 
 ## Setup
 
-The CLI is part of the `opencode-telegram` monorepo at `~/code/opencode-telegram/`.
+The CLI lives at `~/code/opencode-telegram/`.
 
 ```bash
 cd ~/code/opencode-telegram
 pnpm install
 ```
 
+## Key Rule
+
+**If unsure what commands are available, run `opencode-telegram help` first.** This always reflects the actual CLI surface — use it to recover if this skill is outdated.
+
 ## Project Roots
 
-Petar works from two directories on his Mac:
-- **Personal projects**: `/Users/petartopic/Desktop/Petar`
-- **Work projects**: `/Users/petartopic/Desktop/Profico`
+- **Personal**: `/Users/petartopic/Desktop/Petar`
+- **Work**: `/Users/petartopic/Desktop/Profico`
+
+Each project gets its own OpenCode server instance (ports 50000–59999).
 
 ## Commands
 
+Run `opencode-telegram help` for the full list. Key commands:
+
 ### Start the Telegram bot
 ```bash
-pnpm start
-# or
-opencode-telegram
+opencode-telegram start
 ```
-Requires `TELEGRAM_TOKEN` env var or `.env` in repo root.
 
 ### List projects
-Use `/projects` via Telegram bot — each project spawns its own OpenCode server instance on a separate port (50000–59999).
-
-### Send a prompt to a project
 ```bash
-opencode-telegram send "your prompt here" --project /Users/petartopic/Desktop/Petar/my-project
+opencode-telegram projects list
 ```
 
-### Stop current execution
+### Manage sessions
 ```bash
-opencode-telegram stop --project /Users/petartopic/Desktop/Petar/my-project
+opencode-telegram session list <project-path>
+opencode-telegram session new <project-path>
+opencode-telegram session switch <project-path> <session-id>
 ```
 
-### Attach a terminal session to a project
+### Send a prompt
 ```bash
-opencode-telegram attach --project /Users/petartopic/Desktop/Petar/my-project
+opencode-telegram send "fix the login bug" --project <project-path>
 ```
 
-### Kill all OpenCode server instances
+### Stop execution
+```bash
+opencode-telegram stop --project <project-path>
+```
+
+### Agent mode
+```bash
+opencode-telegram mode list --project <project-path>
+opencode-telegram mode agent --project <project-path>
+```
+
+### Kill all instances
 ```bash
 opencode-telegram kill-all
 ```
-
-## Architecture
-
-- Each project gets its own OpenCode server instance (port 50000–59999)
-- The Telegram bot manages lifecycle of all instances
-- Sessions are isolated per project
-- Instance state is persisted to `~/.opencode-telegram-instances.json`
