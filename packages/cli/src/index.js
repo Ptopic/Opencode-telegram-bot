@@ -18,6 +18,7 @@ import { setModeCommand } from "./commands/mode.js";
 import { statusCommand } from "./commands/status.js";
 import { logsCommand } from "./commands/logs.js";
 import { watchCommand } from "./commands/watch.js";
+import { startServer } from "./server.js";
 import { helpCommand } from "./commands/help.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -748,6 +749,14 @@ if (command === "start") {
         console.error("Usage: opencode-telegram start [bot|cli|all]");
         process.exit(1);
     }
+}
+
+// ── serve: HTTP API server for cloudflared tunneling ───────────────────────
+if (command === "serve") {
+    const port = parseInt(args.find((a) => a.startsWith("--port="))?.split("=")[1] ?? "4097", 10);
+    startServer(port);
+    // Server runs indefinitely; don't exit
+    await new Promise(() => {});
 }
 
 // ── Convenience shortcuts: opencode-telegram bot | opencode-telegram cli ──────

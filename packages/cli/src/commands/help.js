@@ -9,6 +9,7 @@ USAGE
   opencode-telegram [command] [options]
 
 START MODES
+  opencode-telegram serve [--port 4097]  HTTP API server (for cloudflared tunnel)
   opencode-telegram start bot      Start Telegram bot only
   opencode-telegram start cli      Start interactive CLI REPL only
   opencode-telegram start all      Start both bot and CLI (default)

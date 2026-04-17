@@ -20,12 +20,58 @@ pnpm install
 
 **If unsure what commands are available, run `opencode-telegram help` first.** This always reflects the actual CLI surface — use it to recover if this skill is outdated.
 
+## HTTP API (Cloudflare Tunnel)
+
+When the HTTP server is running and tunneled via cloudflared, I can call it directly from the cloud.
+
+### Start the HTTP API server on your Mac
+
+```bash
+opencode-telegram serve [--port 4097]
+```
+
+### Tunnel with cloudflared
+
+```bash
+cloudflared tunnel --url http://localhost:4097 --hostname cli.petartopic.com
+```
+
+Keep both running (e.g. in a `screen` or `tmux` session).
+
+### API Endpoints
+
+Base URL: `https://cli.petartopic.com`
+
+| Method | Path | Body | Description |
+|--------|------|------|-------------|
+| GET | `/health` | — | Server health + running instances |
+| GET | `/status` | — | Detailed status of all instances |
+| GET | `/projects` | — | Project roots |
+| GET | `/sessions/:project` | — | List sessions for a project |
+| POST | `/sessions/:project/new` | `{ title? }` | Create new session |
+| POST | `/send` | `{ project, prompt, sessionId? }` | Send a prompt |
+| GET | `/watch/:project` | — | SSE stream of session messages |
+| POST | `/stop` | `{ project, sessionId? }` | Abort current execution |
+
+**Example — send a prompt:**
+```bash
+curl -X POST https://cli.petartopic.com/send \
+  -H "Content-Type: application/json" \
+  -d '{"project": "/Users/petartopic/Desktop/Petar/my-project", "prompt": "Hello"}'
+```
+
+**Example — watch a session via SSE:**
+```
+GET https://cli.petartopic.com/watch/<encoded-project-path>?session=<session-id>&interval=2000
+```
+
 ## Start Modes
 
 ```bash
 opencode-telegram           # bot + CLI together (default)
 opencode-telegram bot       # Telegram bot only
 opencode-telegram cli       # Interactive CLI REPL only
+opencode-telegram serve     # HTTP API server for cloudflared tunnel
 opencode-telegram start bot # Same as 'bot'
 opencode-telegram start all # Same as default
 ```
@@ -37,7 +83,7 @@ opencode-telegram start all # Same as default
 
 Each project gets its own OpenCode server instance (ports 50000–59999).
 
-## Commands
+## CLI Commands
 
 Run `opencode-telegram help` for the full list. Key commands:
 
@@ -63,12 +109,6 @@ opencode-telegram send "fix the login bug" --project <project-path>
 opencode-telegram stop --project <project-path>
 ```
 
-### Agent mode
-```bash
-opencode-telegram mode list --project <project-path>
-opencode-telegram mode agent --project <project-path>
-```
-
 ### Watch session activity
 ```bash
 opencode-telegram watch <project-path>              # poll every 2s
@@ -76,6 +116,12 @@ opencode-telegram watch <project-path> --interval=1000
 ```
 
 This streams new messages as they arrive — useful for real-time monitoring.
+
+### Status & logs
+```bash
+opencode-telegram status              # Show all running instances
+opencode-telegram logs <project-path> # Tail logs for a project
+```
 
 ### Kill all instances
 ```bash
