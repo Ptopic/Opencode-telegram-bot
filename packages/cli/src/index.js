@@ -17,6 +17,7 @@ import { stopCommand } from "./commands/stop.js";
 import { setModeCommand } from "./commands/mode.js";
 import { statusCommand } from "./commands/status.js";
 import { logsCommand } from "./commands/logs.js";
+import { watchCommand } from "./commands/watch.js";
 import { helpCommand } from "./commands/help.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -711,6 +712,14 @@ if (command === "logs") {
     const linesArg = remaining.find((a) => a.startsWith("--lines="));
     const lines = linesArg ? parseInt(linesArg.split("=")[1], 10) : 100;
     await logsCommand(projectPath, { lines });
+    process.exit(0);
+}
+
+if (command === "watch") {
+    const { projectPath, remaining } = parseProjectFlag(args);
+    const intervalArg = remaining.find((a) => a.startsWith("--interval="));
+    const interval = intervalArg ? parseInt(intervalArg.split("=")[1], 10) : 2000;
+    await watchCommand(projectPath, { interval });
     process.exit(0);
 }
 

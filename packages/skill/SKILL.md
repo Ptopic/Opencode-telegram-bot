@@ -69,6 +69,14 @@ opencode-telegram mode list --project <project-path>
 opencode-telegram mode agent --project <project-path>
 ```
 
+### Watch session activity
+```bash
+opencode-telegram watch <project-path>              # poll every 2s
+opencode-telegram watch <project-path> --interval=1000
+```
+
+This streams new messages as they arrive — useful for real-time monitoring.
+
 ### Kill all instances
 ```bash
 opencode-telegram kill-all

@@ -35,9 +35,10 @@ COMMANDS
     mode list [--project <path>]      List available modes
 
   Lifecycle
-    status            Show all running instances and their health
-    logs <path>       Tail logs for a project
-    kill-all          Stop all OpenCode server instances
+    status              Show all running instances and their health
+    logs <path>         Tail logs for a project
+    watch <path>        Stream session messages (Ctrl+C to stop)
+    kill-all            Stop all OpenCode server instances
 
   Utility
     help              Show this help text
@@ -51,6 +52,8 @@ EXAMPLES
   opencode-telegram send "fix the login bug" --project /Users/petartopic/Desktop/Petar/my-project
   opencode-telegram stop --project /Users/petartopic/Desktop/Petar/my-project
   opencode-telegram mode agent --project /Users/petartopic/Desktop/Profico/web-app
+  opencode-telegram watch /Users/petartopic/Desktop/Petar/my-project
+  opencode-telegram watch /Users/petartopic/Desktop/Petar/my-project --interval=1000
   opencode-telegram kill-all
 
 PROJECT ROOTS
