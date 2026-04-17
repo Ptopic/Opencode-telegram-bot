@@ -1,0 +1,25 @@
+# opencode-telegram zsh completion
+# Add to your .zshrc: fpath=(~/path/to/completions $fpath) && compinit
+# Or source this file: source /path/to/completions/zsh
+
+_opencode_telegram() {
+    local -a commands
+    commands=(
+        "start:start bot|cli|all"
+        "bot:Telegram bot only"
+        "cli:Interactive CLI REPL"
+        "projects:List projects"
+        "session:Manage sessions"
+        "send:Send a prompt"
+        "stop:Abort execution"
+        "mode:Set agent mode"
+        "status:Show instance status"
+        "logs:Tail project logs"
+        "kill-all:Kill all instances"
+        "help:Show help"
+    )
+
+    _describe 'command' commands
+}
+
+compdef _opencode_telegram opencode-telegram

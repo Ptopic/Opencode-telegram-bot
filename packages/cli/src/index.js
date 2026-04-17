@@ -15,6 +15,8 @@ import {
 import { sendPromptCommand } from "./commands/send.js";
 import { stopCommand } from "./commands/stop.js";
 import { setModeCommand } from "./commands/mode.js";
+import { statusCommand } from "./commands/status.js";
+import { logsCommand } from "./commands/logs.js";
 import { helpCommand } from "./commands/help.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -696,6 +698,19 @@ if (command === "send") {
 if (command === "stop") {
     const { projectPath } = parseProjectFlag(args);
     await stopCommand(projectPath);
+    process.exit(0);
+}
+
+if (command === "status") {
+    await statusCommand();
+    process.exit(0);
+}
+
+if (command === "logs") {
+    const { projectPath, remaining } = parseProjectFlag(args);
+    const linesArg = remaining.find((a) => a.startsWith("--lines="));
+    const lines = linesArg ? parseInt(linesArg.split("=")[1], 10) : 100;
+    await logsCommand(projectPath, { lines });
     process.exit(0);
 }
 

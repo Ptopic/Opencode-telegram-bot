@@ -11,7 +11,7 @@ USAGE
 START MODES
   opencode-telegram start bot      Start Telegram bot only
   opencode-telegram start cli      Start interactive CLI REPL only
-  opencode-telegram start all      Start both bot and bot (default)
+  opencode-telegram start all      Start both bot and CLI (default)
   opencode-telegram bot            Shortcut for 'start bot'
   opencode-telegram cli            Shortcut for 'start cli'
   opencode-telegram                Shortcut for 'start all'
@@ -35,10 +35,12 @@ COMMANDS
     mode list [--project <path>]      List available modes
 
   Lifecycle
-    kill-all    Stop all OpenCode server instances
+    status            Show all running instances and their health
+    logs <path>       Tail logs for a project
+    kill-all          Stop all OpenCode server instances
 
   Utility
-    help        Show this help text
+    help              Show this help text
 
 EXAMPLES
   opencode-telegram                    # start bot + CLI

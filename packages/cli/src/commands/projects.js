@@ -5,13 +5,9 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
 import { probeHealth } from "../api-client.js";
+import { getProjectRoots } from "../config.js";
 
 const STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
-
-export const PROJECT_ROOTS = [
-  { scope: "petar", path: "/Users/petartopic/Desktop/Petar", label: "Petar" },
-  { scope: "profico", path: "/Users/petartopic/Desktop/Profico", label: "Profico" },
-];
 
 function readState() {
   if (!existsSync(STATE_FILE)) return { instances: {} };
@@ -29,7 +25,7 @@ export async function listProjects() {
   const state = readState();
   const rows = [];
 
-  for (const root of PROJECT_ROOTS) {
+  for (const root of getProjectRoots()) {
     rows.push({ type: "root", scope: root.scope, path: root.path, label: root.label });
     // Discover sub-projects under each root
     try {
