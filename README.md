@@ -1,75 +1,42 @@
-# OpenCode Telegram Bot
+# OpenCode Telegram
 
-## Local CLI (recommended)
+Monorepo for the OpenCode Telegram bot, CLI client, and OpenClaw skill.
 
-Install dependencies:
+## Packages
 
-```bash
-npm install
-```
+- [`packages/bot`](packages/bot/) — Telegram bot (node-telegram-bot-api)
+- [`packages/cli`](packages/cli/) — CLI entry point (`opencode-telegram` command)
+- [`packages/skill`](packages/skill/) — OpenClaw agent skill
 
-Run with npx from this folder:
-
-```bash
-npx --yes .
-```
-
-`npm run start`, `npx --yes .`, and `opencode-telegram` now start:
-- OpenCode server (`opencode-ai serve`) on `0.0.0.0:62771`
-- Telegram bot process using `OPENCODE_BASE_URL=http://127.0.0.1:62771` by default
-
-Run the same managed setup explicitly in dev mode:
+## Quick Start
 
 ```bash
-opencode-telegram dev
+pnpm install
+pnpm start
 ```
 
-Or without global link:
+Requires `TELEGRAM_TOKEN` in environment or `.env` at repo root.
+
+## Architecture
+
+Each project on Petar's Mac gets its own OpenCode server instance managed by the bot. Instances run on ports 50000–59999, with state persisted to `~/.opencode-telegram-instances.json`.
+
+## Development
 
 ```bash
-npx --yes . dev
+pnpm dev          # start in managed mode
+pnpm attach       # attach terminal to existing instance
+pnpm kill-all     # stop all OpenCode server instances
 ```
 
-`opencode-telegram dev` uses the same default server host and port.
+## Monorepo Structure
 
-Optional dev env vars:
-- `OPENCODE_DEV_PORT` (default `62771`)
-- `OPENCODE_DEV_HOST` (default `0.0.0.0`)
-
-Or link globally for a stable command:
-
-```bash
-npm link
-opencode-telegram
 ```
-
-Create and attach a session from your current project directory (no path argument needed):
-
-```bash
-opencode-telegram attach http://localhost:62771
+opencode-telegram/
+├── packages/
+│   ├── bot/          # Telegram bot (move from repo root)
+│   ├── cli/          # CLI entry point (moved from bin/)
+│   └── skill/       # OpenClaw agent skill
+├── package.json      # Root workspace
+└── pnpm-workspace.yaml
 ```
-
-If URL is omitted, it defaults to `OPENCODE_BASE_URL`/`OPENCODE_URL` or `http://127.0.0.1:62771`.
-
-The CLI loads `.env` from the current folder, parent folder, or repository root.
-
-Required env var:
-
-- `TELEGRAM_TOKEN`
-
-Optional:
-
-- `OPENCODE_TELEGRAM_ENV_FILE` (custom env file path)
-- `OPENCODE_BASE_URL` (shared OpenCode server URL, default `http://127.0.0.1:62771` for the managed local server)
-- `OPENCODE_URL` (legacy alias for `OPENCODE_BASE_URL`)
-
-## Docker fallback (optional)
-
-From repository root:
-
-```bash
-docker compose up --build
-```
-
-If you use Docker instead of the managed local startup, start OpenCode separately and point the bot to it using `OPENCODE_BASE_URL`.
-This repo's compose stack runs OpenCode on port `62771`.

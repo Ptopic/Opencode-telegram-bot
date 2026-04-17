@@ -9,6 +9,8 @@ import { createConnection } from "node:net";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+// repoRoot: packages/cli/src/index.js -> packages/cli -> packages -> repo root
+const repoRoot = path.resolve(__dirname, "../../..");
 const packageRoot = path.resolve(__dirname, "..");
 
 const INSTANCES_STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
@@ -54,9 +56,9 @@ const explicitEnv = process.env.OPENCODE_TELEGRAM_ENV_FILE;
 if (explicitEnv) {
     tryLoadEnv(path.resolve(process.cwd(), explicitEnv));
 } else {
-    tryLoadEnv(path.resolve(process.cwd(), ".env"));
-    tryLoadEnv(path.resolve(process.cwd(), "..", ".env"));
-    tryLoadEnv(path.resolve(packageRoot, "..", ".env"));
+    tryLoadEnv(path.resolve(repoRoot, ".env"));
+    tryLoadEnv(path.resolve(repoRoot, "..", ".env"));
+    tryLoadEnv(path.resolve(packageRoot, ".env"));
 }
 
 function hasChildExited(child) {
@@ -401,7 +403,7 @@ function spawnChild(command, args, options) {
     return spawn(command, args, {
         stdio: "inherit",
         env: process.env,
-        cwd: packageRoot,
+        cwd: repoRoot,
         ...options,
     });
 }
@@ -422,7 +424,8 @@ async function runManagedMode() {
     delete process.env.OPENCODE_BASE_URL;
     delete process.env.OPENCODE_URL;
 
-    const bot = spawnChild(process.execPath, [path.resolve(packageRoot, "bot.js")]);
+    const botEntry = path.resolve(repoRoot, "packages", "bot", "src", "index.js");
+    const bot = spawnChild(process.execPath, [botEntry]);
 
     const children = [
         { name: "Telegram bot", process: bot },
