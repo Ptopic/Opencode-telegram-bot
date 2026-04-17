@@ -427,34 +427,25 @@ function waitForChildExit(child) {
     });
 }
 
-async function runManagedMode() {
-    console.log("Starting Telegram bot with multi-instance mode...");
-    console.log("Each project will get its own OpenCode server instance.");
+// ── Shared child-process runner ───────────────────────────────────────────────
 
-    delete process.env.OPENCODE_BASE_URL;
-    delete process.env.OPENCODE_URL;
-
+function spawnBot() {
     const botEntry = path.resolve(repoRoot, "packages", "bot", "src", "index.js");
-    const bot = spawnChild(process.execPath, [botEntry]);
+    return spawnChild(process.execPath, [botEntry]);
+}
 
-    const children = [
-        { name: "Telegram bot", process: bot },
-    ];
-
+async function runWithChildren(children, label) {
     let shutdownStarted = false;
 
     const shutdown = (reason) => {
         if (shutdownStarted) return;
         shutdownStarted = true;
-
         console.log(`Shutting down (${reason})...`);
-
         for (const child of children) {
             if (!hasChildExited(child.process)) {
                 child.process.kill("SIGTERM");
             }
         }
-
         setTimeout(() => {
             for (const child of children) {
                 if (!hasChildExited(child.process)) {
@@ -467,9 +458,8 @@ async function runManagedMode() {
     process.on("SIGINT", () => shutdown("SIGINT"));
     process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-    return await new Promise((resolve) => {
+    return new Promise((resolve) => {
         let resolved = false;
-
         const finish = (code) => {
             if (resolved) return;
             resolved = true;
@@ -485,12 +475,11 @@ async function runManagedMode() {
 
             child.process.once("exit", (code, signal) => {
                 if (shutdownStarted) {
-                    if (children.every((entry) => hasChildExited(entry.process))) {
+                    if (children.every((c) => hasChildExited(c.process))) {
                         finish(typeof code === "number" ? code : 0);
                     }
                     return;
                 }
-
                 console.error(`${child.name} exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"})`);
                 shutdown(`${child.name} exited`);
                 finish(typeof code === "number" ? code : 1);
@@ -498,6 +487,82 @@ async function runManagedMode() {
         }
     });
 }
+
+// ── Mode: bot only ─────────────────────────────────────────────────────────────
+
+async function runBotMode() {
+    console.log("Starting Telegram bot...");
+    const bot = spawnBot();
+    return await runWithChildren([{ name: "Telegram bot", process: bot }], "bot");
+}
+
+// ── Mode: interactive CLI REPL ─────────────────────────────────────────────────
+
+async function runCLIMode() {
+    console.log("OpenCode CLI REPL");
+    console.log("Type 'send <prompt>' to send a prompt, 'projects' to list projects, 'exit' to quit.");
+    console.log("(REPL mode — for advanced use. Telegram bot is recommended for most workflows.)\n");
+
+    const readline = await import("node:readline");
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        prompt: "opencode> ",
+    });
+
+    rl.prompt();
+
+    rl.on("line", async (line) => {
+        const cmd = line.trim();
+        if (!cmd) {
+            rl.prompt();
+            return;
+        }
+
+        if (cmd === "exit" || cmd === "quit") {
+            rl.close();
+            return;
+        }
+
+        if (cmd.startsWith("send ")) {
+            const prompt = cmd.slice(5).trim();
+            if (!prompt) {
+                console.log("Usage: send <prompt>");
+            } else {
+                await sendPromptCommand(prompt, undefined).catch((err) =>
+                    console.error(`Error: ${err?.message ?? err}`)
+                );
+            }
+        } else if (cmd === "projects") {
+            await listProjects();
+        } else {
+            console.log(`Unknown command: ${cmd}`);
+            console.log("Available: send <prompt>, projects, exit");
+        }
+
+        rl.prompt();
+    });
+
+    return new Promise(() => {}); // Keep running until user quits
+}
+
+// ── Mode: bot + CLI together ───────────────────────────────────────────────────
+
+async function runAllMode() {
+    console.log("Starting Telegram bot + CLI...");
+    console.log("Each project will get its own OpenCode server instance.");
+
+    delete process.env.OPENCODE_BASE_URL;
+    delete process.env.OPENCODE_URL;
+
+    const bot = spawnBot();
+    const children = [{ name: "Telegram bot", process: bot }];
+
+    return await runWithChildren(children, "all");
+}
+
+// Legacy alias
+const runManagedMode = runAllMode;
 
 async function runAttachMode(rawBaseUrl) {
     const projectDirectory = path.resolve(process.env.INIT_CWD || process.env.PWD || process.cwd());
@@ -645,6 +710,31 @@ if (command === "help") {
     process.exit(0);
 }
 
-// ── Default: start Telegram bot ──────────────────────────────────────────────
-const exitCode = await runManagedMode();
+// ── start bot | start cli | start all ────────────────────────────────────────
+if (command === "start") {
+    const target = args[0];
+    if (target === "bot") {
+        process.exit(await runBotMode());
+    } else if (target === "cli") {
+        process.exit(await runCLIMode());
+    } else if (target === "all" || !target) {
+        process.exit(await runAllMode());
+    } else {
+        console.error(`Unknown start target: ${target}`);
+        console.error("Usage: opencode-telegram start [bot|cli|all]");
+        process.exit(1);
+    }
+}
+
+// ── Convenience shortcuts: opencode-telegram bot | opencode-telegram cli ──────
+if (command === "bot") {
+    process.exit(await runBotMode());
+}
+
+if (command === "cli") {
+    process.exit(await runCLIMode());
+}
+
+// ── Default: start all ────────────────────────────────────────────────────────
+const exitCode = await runAllMode();
 process.exit(exitCode);

@@ -20,6 +20,16 @@ pnpm install
 
 **If unsure what commands are available, run `opencode-telegram help` first.** This always reflects the actual CLI surface — use it to recover if this skill is outdated.
 
+## Start Modes
+
+```bash
+opencode-telegram           # bot + CLI together (default)
+opencode-telegram bot       # Telegram bot only
+opencode-telegram cli       # Interactive CLI REPL only
+opencode-telegram start bot # Same as 'bot'
+opencode-telegram start all # Same as default
+```
+
 ## Project Roots
 
 - **Personal**: `/Users/petartopic/Desktop/Petar`
@@ -30,11 +40,6 @@ Each project gets its own OpenCode server instance (ports 50000–59999).
 ## Commands
 
 Run `opencode-telegram help` for the full list. Key commands:
-
-### Start the Telegram bot
-```bash
-opencode-telegram start
-```
 
 ### List projects
 ```bash
