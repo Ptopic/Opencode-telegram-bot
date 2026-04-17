@@ -1,0 +1,14 @@
+{
+  "projectRoots": [
+    {
+      "scope": "petar",
+      "path": "/Users/petartopic/Desktop/Petar",
+      "label": "Petar"
+    },
+    {
+      "scope": "profico",
+      "path": "/Users/petartopic/Desktop/Profico",
+      "label": "Profico"
+    }
+  ]
+}
