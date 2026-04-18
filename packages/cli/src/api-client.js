@@ -4,6 +4,69 @@
  */
 import axios from "axios";
 
+/**
+ * Collect SSE reply events from an OpenCode event stream.
+ * Returns the first non-empty reply text found.
+ */
+async function collectSSEvents(baseUrl, sessionId, timeoutMs = 30000) {
+  const url = `${baseUrl}/session/${sessionId}/event`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, chunk } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (!data || data === "[DONE]") continue;
+
+        let event;
+        try { event = JSON.parse(data); } catch { continue; }
+
+        // Look for assistant messages with text parts
+        const parts = event?.data?.parts ?? event?.parts ?? event?.response?.parts ?? [];
+        for (const part of parts) {
+          if (part?.type === "text" && part?.text?.trim()) {
+            clearTimeout(timeout);
+            return part.text.trim();
+          }
+        }
+
+        // Fallback: check common reply fields
+        const reply =
+          event?.data?.reply ??
+          event?.reply ??
+          event?.response?.reply ??
+          event?.text ??
+          event?.message ??
+          "";
+        if (typeof reply === "string" && reply.trim()) {
+          clearTimeout(timeout);
+          return reply.trim();
+        }
+      }
+    }
+  } catch {
+    // Timeout or error — no SSE reply found
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  return "";
+}
+
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 function createClient(baseUrl) {
@@ -69,35 +132,22 @@ export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const payload = { parts: [{ type: "text", text }] };
   if (agent) payload.agent = agent;
 
+  // Start SSE listener in parallel with sending the message
+  // Replies may come via event stream instead of HTTP response body
+  const ssePromise = collectSSEvents(baseUrl, sessionId, 30000);
+
   let res;
   try {
     res = await createClient(baseUrl).post(`/session/${sessionId}/message`, payload);
   } catch (err) {
-    // If the POST itself fails, that's a real error
     throw err;
   }
 
   const direct = extractReply(res.data);
   if (direct) return direct;
 
-  // Direct reply was empty — wait for the session to process and poll for the result
-  // This handles cases where the response is delivered via event stream rather than inline
-  for (let attempt = 0; attempt < 20; attempt++) {
-    await new Promise((r) => setTimeout(r, 500));
-    try {
-      const msgs = await createClient(baseUrl).get(`/session/${sessionId}/message`);
-      const messages = msgs.data?.messages ?? msgs.data ?? [];
-      const last = Array.isArray(messages) ? messages[messages.length - 1] : null;
-      if (last) {
-        const fromLast = extractReply(last);
-        if (fromLast) return fromLast;
-      }
-    } catch {
-      // Ignore polling errors
-    }
-  }
-
-  return "";
+  // Direct reply empty — wait for SSE reply
+  return ssePromise;
 }
 
 /**
