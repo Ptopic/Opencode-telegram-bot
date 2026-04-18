@@ -96,7 +96,11 @@ export async function listModes(baseUrl) {
     .filter((agent) => typeof agent.name === "string" && agent.name.trim() !== "")
     .filter((agent) => {
       const mode = typeof agent.mode === "string" ? agent.mode.toLowerCase() : "";
-      return mode !== "subagent";
+      if (mode === "subagent") return false;
+      // Only include agents with a non-empty description (filters out internal agents like compaction/summary/title)
+      const description = typeof agent.description === "string" ? agent.description.trim() : "";
+      if (!description) return false;
+      return true;
     })
     .map((agent) => ({
       name: agent.name.trim(),
