@@ -268,40 +268,6 @@ async function handleRequest(req, res) {
       return;
     }
 
-    // ── TEMP DEBUG raw /agent with full detail ───────────────────────────
-    if (pathname === "/debug/raw" && method === "GET") {
-      const state = readState();
-      const instances = Object.entries(state.instances ?? {});
-      if (!instances.length) return jsonResponse(res, 200, { note: "no instances" });
-      const [[p, inst]] = instances;
-      try {
-        const raw = await fetch(`${inst.baseUrl}/agent`, { signal: AbortSignal.timeout(8000) });
-        const text = await raw.text();
-        let json = null;
-        try { json = JSON.parse(text); } catch {}
-        if (!Array.isArray(json)) return jsonResponse(res, 200, { notArray: true, keys: Object.keys(json ?? {}) });
-        const all = json.map(a => ({ name: a?.name, mode: a?.mode, rank_subagent: a?.mode?.toLowerCase() === "subagent", rank_primary: a?.mode?.toLowerCase() === "primary" }));
-        return jsonResponse(res, 200, { total: json.length, all });
-      } catch (err) {
-        return jsonResponse(res, 200, { error: err.message });
-      }
-    }
-
-    // ── TEMP DEBUG listModes ─────────────────────────────────────────────
-    if (pathname === "/debug/listmodes" && method === "GET") {
-      const state = readState();
-      const instances = Object.entries(state.instances ?? {});
-      if (!instances.length) return jsonResponse(res, 200, { note: "no instances" });
-      const [[p, inst]] = instances;
-      try {
-        const { listModes } = await import("./api-client.js");
-        const modes = await listModes(inst.baseUrl);
-        return jsonResponse(res, 200, { count: modes.length, modes: modes.map(m => m.name) });
-      } catch (err) {
-        return jsonResponse(res, 200, { error: err.message });
-      }
-    }
-
     // ── GET /modes/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/modes/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length));
