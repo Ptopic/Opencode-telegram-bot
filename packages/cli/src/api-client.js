@@ -6,7 +6,7 @@ import axios from "axios";
 
 /**
  * Collect SSE reply events from an OpenCode event stream.
- * Returns the first non-empty reply text found.
+ * Mirrors the Telegram bot's SSE parsing logic exactly.
  */
 async function collectSSEvents(baseUrl, sessionId, timeoutMs = 30000) {
   const url = `${baseUrl}/session/${sessionId}/event`;
@@ -24,42 +24,54 @@ async function collectSSEvents(baseUrl, sessionId, timeoutMs = 30000) {
       if (done) break;
 
       buffer += decoder.decode(chunk, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
 
-      for (const line of lines) {
-        if (!line.startsWith("data:")) continue;
-        const data = line.slice(5).trim();
-        if (!data || data === "[DONE]") continue;
+      // Split on SSE event boundary (double newline)
+      const eventBlocks = buffer.split("\n\n");
+      buffer = eventBlocks.pop() ?? ""; // keep last incomplete block in buffer
 
-        let event;
-        try { event = JSON.parse(data); } catch { continue; }
-
-        // Look for assistant messages with text parts
-        const parts = event?.data?.parts ?? event?.parts ?? event?.response?.parts ?? [];
-        for (const part of parts) {
-          if (part?.type === "text" && part?.text?.trim()) {
-            clearTimeout(timeout);
-            return part.text.trim();
+      for (const block of eventBlocks) {
+        const lines = block.split("\n");
+        // Merge continued data: lines (SSE can have multi-line data)
+        const dataLines = [];
+        for (const line of lines) {
+          if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trim());
           }
         }
+        if (!dataLines.length) continue;
 
-        // Fallback: check common reply fields
-        const reply =
-          event?.data?.reply ??
-          event?.reply ??
-          event?.response?.reply ??
-          event?.text ??
-          event?.message ??
-          "";
-        if (typeof reply === "string" && reply.trim()) {
-          clearTimeout(timeout);
-          return reply.trim();
+        const joined = dataLines.join("\n");
+        if (joined === "[DONE]") continue;
+
+        let event;
+        try { event = JSON.parse(joined); } catch { continue; }
+
+        // Unwrap wrapper format { payload: { ... } }
+        const payload = event?.payload ?? event;
+
+        // Look for assistant messages with text parts — mirrors bot's isAssistantLikeMessage
+        const messages = payload?.messages ?? payload?.data?.messages ?? [];
+        for (const msg of messages) {
+          const role = msg?.role ?? msg?.type ?? "";
+          if (typeof role === "string" && role.toLowerCase() !== "assistant") continue;
+          const text = msg?.content ?? msg?.text ?? "";
+          if (typeof text === "string" && text.trim()) {
+            clearTimeout(timeout);
+            return text.trim();
+          }
+          // Also check parts array
+          const parts = msg?.parts ?? msg?.content?.parts ?? [];
+          for (const part of parts) {
+            if (part?.type === "text" && part?.text?.trim()) {
+              clearTimeout(timeout);
+              return part.text.trim();
+            }
+          }
         }
       }
     }
   } catch {
-    // Timeout or error — no SSE reply found
+    // Timeout or error
   } finally {
     clearTimeout(timeout);
   }
