@@ -181,8 +181,8 @@ export async function listModes(baseUrl) {
       return true;
     })
     .map((agent) => ({
-      // Strip all invisible Unicode characters from the name (zero-width spaces, BOM, nbsp, etc.)
-      name: agent.name.replace(/[\u200B\u200C\u200D\uFEFF\u00A0]/g, "").replace(/\s+/g, " ").trim(),
+      // Normalize and strip all invisible Unicode to get clean ASCII name
+      name: agent.name.normalize("NFKD").replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cn}]/gu, "").replace(/\s+/g, " ").trim(),
       description: typeof agent.description === "string" ? agent.description.trim() : "",
     }));
 
