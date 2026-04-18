@@ -236,12 +236,8 @@ async function findExistingInstanceForProject(projectDirectory) {
         return null;
     }
 
-    const result = await probeHealth(instance.baseUrl, 2000);
-    if (result.ok) {
-        return instance;
-    }
-
-    return null;
+    // Port is in use — trust the instance even if health probe times out
+    return instance;
 }
 
 async function spawnInstanceForProject(projectDirectory) {
@@ -376,12 +372,12 @@ async function getOrCreateAttachBaseUrl(rawValue, projectDirectory) {
     const instance = findInstanceForDirectory(state, projectDirectory);
 
     if (instance && instance.baseUrl && instance.status === "ready") {
-        const result = await probeHealth(instance.baseUrl, 2000);
-        if (result.ok) {
+        const inUse = await isPortInUse(instance.port);
+        if (inUse) {
             console.log(`Found matching instance for ${projectDirectory}: ${instance.baseUrl}`);
             return instance.baseUrl;
         }
-        console.log(`Instance found but not healthy, spawning new one...`);
+        console.log(`Instance found but port not in use — will spawn new`);
     }
 
     console.log(`No matching instance found for ${projectDirectory}`);
