@@ -495,7 +495,7 @@ function getMessageParts(msg) {
   return [];
 }
 
-export function startServer(port = 4097) {
+export function startServer(port = 4097, { watch = false } = {}) {
   const server = http.createServer(handleRequest);
 
   server.on("error", (err) => {
@@ -514,7 +514,49 @@ export function startServer(port = 4097) {
     console.log("  POST /send                — send prompt { project, prompt, sessionId? }");
     console.log("  GET  /watch/:project      — SSE stream of messages");
     console.log("  POST /stop                — abort session { project, sessionId? }");
+    if (watch) {
+      console.log("\n🔁 Watch mode enabled — restarting on file changes...");
+      startFileWatcher();
+    }
   });
 
   return server;
+}
+
+// ── File watcher for --watch mode ─────────────────────────────────────────────
+function startFileWatcher() {
+  // ESM-compatible dynamic imports
+  const { createRequire } = require("node:module");
+  const req = createRequire(import.meta.url);
+  const fs = req("node:fs");
+  const { spawn } = req("node:child_process");
+  const path = req("node:path");
+  const { fileURLToPath } = req("node:url");
+
+  const repoRoot = path.resolve(fileURLToPath(import.meta.url), "..", "..");
+  const watchDir = path.join(repoRoot, "packages", "cli", "src");
+  let debounceTimer = null;
+
+  console.error(`[watch] Monitoring ${watchDir}`);
+
+  const restart = () => {
+    if (debounceTimer) return;
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      console.error("[watch] File change detected, restarting server...");
+      const newServer = spawn(process.execPath, [import.meta.url, "serve"], {
+        cwd: repoRoot,
+        stdio: "inherit",
+        detached: false,
+      });
+      newServer.unref();
+      process.exit(0);
+    }, 1000);
+  };
+
+  fs.watch(watchDir, { recursive: true }, (eventType, filename) => {
+    if (filename && filename.endsWith(".js")) {
+      restart();
+    }
+  });
 }
