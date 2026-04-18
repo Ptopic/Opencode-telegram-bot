@@ -317,6 +317,56 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // ── RAW SSE PROXY — streams /global/event for 15s to see actual events ───
+    if (pathname === "/debug/sse-raw" && method === "GET") {
+      const sessionId = url.searchParams.get("session");
+      if (!sessionId) return errorResponse(res, 400, "Missing ?session=");
+      const state = readState();
+      let baseUrl = null;
+      for (const inst of Object.values(state.instances ?? {})) {
+        if (inst?.status === "ready") { baseUrl = inst.baseUrl; break; }
+      }
+      if (!baseUrl) return errorResponse(res, 500, "No healthy instance");
+
+      res.setHeader("Content-Type", "text/plain");
+      res.setHeader("Cache-Control", "no-cache");
+      res.flushHeaders();
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+
+      try {
+        const sseRes = await fetch(`${baseUrl}/global/event`, {
+          headers: { Accept: "text/event-stream" },
+          signal: controller.signal,
+        });
+        const reader = sseRes.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+
+        while (true) {
+          const { done, chunk } = await reader.read();
+          if (done) break;
+          buf += dec.decode(chunk, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const l of lines) {
+            if (l.startsWith("data:") || l.startsWith("event:") || l.startsWith("id:") || l.trim()) {
+              res.write(l + "\n");
+            }
+          }
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") {
+          res.write(`ERROR: ${err.message}\n`);
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+      res.end();
+      return;
+    }
+
     // ── GET /modes/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/modes/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length));
