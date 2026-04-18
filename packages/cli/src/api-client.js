@@ -62,175 +62,14 @@ export async function deleteSession(baseUrl, sessionId) {
 }
 
 /**
- * Poll session status until idle, then fetch messages for reply.
- * Mirrors bot's waitForSessionIdle + fetchLatestSessionReply flow.
- */
-async function pollSessionUntilIdle(baseUrl, sessionId, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 500));
-
-    try {
-      // Check session status (mirrors bot's waitForSessionIdle)
-      const sessionRes = await createClient(baseUrl).get(`/session/${sessionId}`);
-      const status = sessionRes?.data?.status ?? sessionRes?.data?.state ?? "";
-
-      if (status !== "idle" && status !== "idel") continue;
-
-      // Session is idle — fetch messages and extract reply
-      const msgRes = await createClient(baseUrl).get(
-        `/session/${sessionId}/message`,
-        { params: { limit: 500 }, timeout: 8000 }
-      );
-
-      const payload = msgRes?.data;
-      const messages = Array.isArray(payload)
-        ? payload
-        : Array.isArray(payload?.messages)
-        ? payload.messages
-        : [];
-
-      if (!messages.length) return "";
-
-      // Last message is the assistant reply
-      const last = messages[messages.length - 1];
-      const text = last?.text ?? last?.content ?? "";
-      if (typeof text === "string" && text.trim()) return text.trim();
-
-      const parts = last?.parts ?? last?.content?.parts ?? [];
-      for (const part of parts) {
-        if (part?.type === "text" && part?.text?.trim()) {
-          return part.text.trim();
-        }
-      }
-
-      return "";
-    } catch {
-      // Keep polling
-    }
-  }
-
-  return "";
-}
-
-/**
- * SSE event collector — mirrors the Telegram bot's SSE parsing exactly.
- * Returns the first assistant message text from the event stream.
- */
-async function collectSSEvents(baseUrl, sessionId, timeoutMs = 30000) {
-  const url = `${baseUrl}/global/event`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, chunk } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(chunk, { stream: true });
-
-      // Split on SSE event boundary (double newline)
-      const eventBlocks = buffer.split("\n\n");
-      buffer = eventBlocks.pop() ?? "";
-
-      for (const block of eventBlocks) {
-        const lines = block.split("\n");
-        // Collect all data: lines (SSE can have multi-line data)
-        const dataLines = [];
-        for (const line of lines) {
-          if (line.startsWith("data:")) {
-            dataLines.push(line.slice(5).trimStart()); // trimStart, not trim
-          }
-        }
-        if (!dataLines.length) continue;
-
-        // Join multi-line data fields (same as bot's parseSseJsonEvents)
-        const joined = dataLines.join("\n");
-        if (joined === "[DONE]" || joined === "") continue;
-
-        let event;
-        try { event = JSON.parse(joined); } catch { continue; }
-
-        // Unwrap { payload: { ... } } wrapper (same as bot's unwrapSsePayload)
-        const payload = (event?.payload && typeof event.payload === "object")
-          ? event.payload
-          : event;
-
-        // Extract sessionId from many possible fields (same as bot's getEventSessionId)
-        const eventSid =
-          payload?.sessionID ??
-          payload?.sessionId ??
-          payload?.session?.id ??
-          payload?.info?.sessionID ??
-          payload?.info?.sessionId ??
-          payload?.info?.session?.id ??
-          payload?.properties?.sessionID ??
-          payload?.properties?.sessionId ??
-          payload?.properties?.session?.id ??
-          payload?.properties?.info?.sessionID ??
-          payload?.properties?.info?.sessionId ??
-          null;
-
-        if (eventSid && eventSid !== sessionId) continue;
-
-        // Look for assistant messages — same logic as bot's isAssistantLikeMessage
-        const messages = payload?.messages ?? payload?.data?.messages ?? [];
-        for (const msg of messages) {
-          const role = msg?.role ?? msg?.type ?? "";
-          if (typeof role === "string" && role.toLowerCase() !== "assistant") continue;
-
-          const text = msg?.text ?? msg?.content ?? "";
-          if (typeof text === "string" && text.trim()) {
-            clearTimeout(timeout);
-            return text.trim();
-          }
-
-          const parts = msg?.parts ?? msg?.content?.parts ?? [];
-          for (const part of parts) {
-            if (part?.type === "text" && part?.text?.trim()) {
-              clearTimeout(timeout);
-              return part.text.trim();
-            }
-          }
-        }
-      }
-    }
-  } catch {
-    // Timeout or error
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  return "";
-}
-
-/**
  * Send a prompt to a session and return the reply text.
  * Uses POST /session/{id}/message { parts: [{ type: "text", text }], agent? }
- * Falls back to polling for reply if direct response is empty.
  */
 export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const payload = { parts: [{ type: "text", text }] };
   if (agent) payload.agent = agent;
-
-  let res;
-  try {
-    res = await createClient(baseUrl).post(`/session/${sessionId}/message`, payload);
-  } catch (err) {
-    throw err;
-  }
-
-  const direct = extractReply(res.data);
-  if (direct) return direct;
-
-  // Direct reply empty — poll session status until idle, then fetch messages
-  return pollSessionUntilIdle(baseUrl, sessionId, 30000);
+  const res = await createClient(baseUrl).post(`/session/${sessionId}/message`, payload);
+  return extractReply(res.data);
 }
 
 /**
@@ -264,9 +103,7 @@ export async function listModes(baseUrl) {
       return true;
     })
     .map((agent) => ({
-      // Use name exactly as returned — do not strip ZWSP or other invisible chars
-      // OpenCode matches against its internal registry which contains the raw names
-      name: agent.name,
+      name: agent.name.replace(/^[\u200B\u200C\u200D\uFEFF\u00A0\s]+/, "").replace(/[\u200B\u200C\u200D\uFEFF\u00A0\s]+$/, ""),
       description: typeof agent.description === "string" ? agent.description.trim() : "",
     }));
 

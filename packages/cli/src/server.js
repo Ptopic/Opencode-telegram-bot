@@ -274,109 +274,6 @@ async function handleRequest(req, res) {
       return;
     }
 
-    // ── TEMP DEBUG SSE raw ────────────────────────────────────────────────
-    if (pathname === "/debug/sse" && method === "GET") {
-      const state = readState();
-      const sessionId = url.searchParams.get("session");
-      if (!sessionId) return errorResponse(res, 400, "Missing ?session=");
-      // Find which instance has this session
-      let baseUrl = null;
-      for (const inst of Object.values(state.instances ?? {})) {
-        if (inst?.status === "ready") {
-          baseUrl = inst.baseUrl;
-          break;
-        }
-      }
-      if (!baseUrl) return errorResponse(res, 500, "No healthy instance");
-
-      // Proxy SSE from /global/event
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-      res.flushHeaders();
-
-      try {
-        const sseRes = await fetch(`${baseUrl}/global/event`, { signal: AbortSignal.timeout(5000) });
-        const reader = sseRes.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let count = 0;
-        while (count < 20) {
-          const { done, chunk } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(chunk, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            if (line.startsWith("data:") || line.startsWith("event:") || line.trim()) {
-              res.write(line + "\n");
-              count++;
-            }
-          }
-        }
-        res.end();
-      } catch (err) {
-        res.end(`error: ${err.message}\n`);
-      }
-      return;
-    }
-
-    // ── TEMP DEBUG SSE raw ────────────────────────────────────────────────
-    if (pathname === "/debug/sse" && method === "GET") {
-      const state = readState();
-      const sessionId = url.searchParams.get("session");
-      if (!sessionId) return errorResponse(res, 400, "Missing ?session=");
-      let baseUrl = null;
-      for (const inst of Object.values(state.instances ?? {})) {
-        if (inst?.status === "ready") { baseUrl = inst.baseUrl; break; }
-      }
-      if (!baseUrl) return errorResponse(res, 500, "No healthy instance");
-
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
-      res.flushHeaders();
-
-      // Stream raw SSE from /global/event to see what it looks like
-      try {
-        const sseRes = await fetch(`${baseUrl}/global/event`);
-        const reader = sseRes.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
-        let count = 0;
-        while (count < 30 && !res.writableEnded) {
-          const { done, chunk } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(chunk, { stream: true });
-          const lines = buf.split("\n");
-          buf = lines.pop() ?? "";
-          for (const l of lines) {
-            if (l.trim()) res.write(l + "\n");
-          }
-          count++;
-        }
-      } catch (err) {
-        res.write(`error: ${err.message}\n`);
-      }
-      res.end();
-      return;
-    }
-
-    // ── TEMP DEBUG send raw ────────────────────────────────────────────────
-    if (pathname === "/debug/send" && method === "POST") {
-      const body = await parseBody(req);
-      const { project: projectPath, sessionId, prompt, agent } = body;
-      if (!projectPath || !sessionId || !prompt) return errorResponse(res, 400, "Missing required fields");
-
-      const state = readState();
-      const instance = findInstanceForPath(state, projectPath);
-      if (!instance) return errorResponse(res, 404, "Instance not found");
-
-      // Call sendPrompt directly to see raw response
-      const { sendPrompt } = await import("./api-client.js");
-      const reply = await sendPrompt(instance.baseUrl, sessionId, prompt, agent ?? null);
-      return jsonResponse(res, 200, { reply, agent });
-    }
-
     // ── GET /modes/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/modes/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length));
@@ -505,7 +402,7 @@ function getMessageParts(msg) {
   return [];
 }
 
-export function startServer(port = 4097, { watch = false } = {}) {
+export function startServer(port = 4097) {
   const server = http.createServer(handleRequest);
 
   server.on("error", (err) => {
@@ -524,49 +421,7 @@ export function startServer(port = 4097, { watch = false } = {}) {
     console.log("  POST /send                — send prompt { project, prompt, sessionId? }");
     console.log("  GET  /watch/:project      — SSE stream of messages");
     console.log("  POST /stop                — abort session { project, sessionId? }");
-    if (watch) {
-      console.log("\n🔁 Watch mode enabled — restarting on file changes...");
-      startFileWatcher();
-    }
   });
 
   return server;
-}
-
-/**
- * Watch source files and restart the server when they change.
- */
-function startFileWatcher() {
-  const { watchFile, unwatchFile } = require("node:fs");
-  const { spawn } = require("node:child_process");
-  const path = require("node:path");
-  const { fileURLToPath } = require("node:url");
-
-  const repoRoot = path.resolve(fileURLToPath(import.meta.url), "../../..");
-  const watchDir = path.join(repoRoot, "packages", "cli", "src");
-  let debounceTimer = null;
-
-  console.error(`[watch] Monitoring ${watchDir}`);
-
-  const restart = () => {
-    if (debounceTimer) return;
-    debounceTimer = setTimeout(() => {
-      debounceTimer = null;
-    }, 1000);
-    console.error("[watch] File change detected, restarting server...");
-    // Spawn new server with same args
-    const newServer = spawn(process.execPath, [import.meta.url, "serve"], {
-      cwd: repoRoot,
-      stdio: "inherit",
-      detached: false,
-    });
-    newServer.on("error", (err) => console.error("[watch] Restart failed:", err.message));
-    process.exit(0);
-  };
-
-  watchFile(watchDir, { persistent: true }, (evt, filename) => {
-    if (filename && !filename.endsWith(".js")) return;
-    console.error(`[watch] ${filename ?? "file"} changed, reloading...`);
-    restart();
-  });
 }
