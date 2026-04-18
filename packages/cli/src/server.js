@@ -81,7 +81,7 @@ async function handleRequest(req, res) {
   }
 
   const url = new URL(req.url, "http://localhost");
-  const pathname = url.pathname.replace(/\/+$/, "") || "/";
+  const pathname = decodeURIComponent(url.pathname).replace(/\/+$/, "") || "/";
   const method = req.method;
 
   try {
