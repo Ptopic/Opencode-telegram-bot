@@ -4,86 +4,6 @@
  */
 import axios from "axios";
 
-/**
- * Collect SSE reply events from an OpenCode event stream.
- * Mirrors the Telegram bot's SSE parsing logic exactly.
- */
-async function collectSSEvents(baseUrl, sessionId, timeoutMs = 30000) {
-  // Use /global/event like the Telegram bot — it multiplexes all session events
-  const url = `${baseUrl}/global/event`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const res = await fetch(url, { signal: controller.signal });
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    while (true) {
-      const { done, chunk } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(chunk, { stream: true });
-
-      // Split on SSE event boundary (double newline)
-      const eventBlocks = buffer.split("\n\n");
-      buffer = eventBlocks.pop() ?? ""; // keep last incomplete block in buffer
-
-      for (const block of eventBlocks) {
-        const lines = block.split("\n");
-        // Merge continued data: lines (SSE can have multi-line data)
-        const dataLines = [];
-        for (const line of lines) {
-          if (line.startsWith("data:")) {
-            dataLines.push(line.slice(5).trim());
-          }
-        }
-        if (!dataLines.length) continue;
-
-        const joined = dataLines.join("\n");
-        if (joined === "[DONE]") continue;
-
-        let event;
-        try { event = JSON.parse(joined); } catch { continue; }
-
-        // Unwrap wrapper format { payload: { ... } }
-        const payload = event?.payload ?? event;
-
-        // Look for assistant messages with text parts — mirrors bot's isAssistantLikeMessage
-        const messages = payload?.messages ?? payload?.data?.messages ?? [];
-        // Filter to events for our session only
-        const eventSessionId = payload?.sessionId ?? event?.sessionId ?? "";
-        if (eventSessionId && eventSessionId !== sessionId) continue;
-
-        for (const msg of messages) {
-          const role = msg?.role ?? msg?.type ?? "";
-          if (typeof role === "string" && role.toLowerCase() !== "assistant") continue;
-          const text = msg?.content ?? msg?.text ?? "";
-          if (typeof text === "string" && text.trim()) {
-            clearTimeout(timeout);
-            return text.trim();
-          }
-          // Also check parts array
-          const parts = msg?.parts ?? msg?.content?.parts ?? [];
-          for (const part of parts) {
-            if (part?.type === "text" && part?.text?.trim()) {
-              clearTimeout(timeout);
-              return part.text.trim();
-            }
-          }
-        }
-      }
-    }
-  } catch {
-    // Timeout or error
-  } finally {
-    clearTimeout(timeout);
-  }
-
-  return "";
-}
-
 const DEFAULT_TIMEOUT_MS = 120_000;
 
 function createClient(baseUrl) {
@@ -142,18 +62,66 @@ export async function deleteSession(baseUrl, sessionId) {
 }
 
 /**
+ * Poll for reply by fetching session messages — mirrors bot's fetchSessionMessages.
+ * Returns text from the last assistant message, or empty string on timeout.
+ */
+async function pollForReply(baseUrl, sessionId, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastMessageCount = 0;
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 800));
+
+    try {
+      const res = await createClient(baseUrl).get(
+        `/session/${sessionId}/message`,
+        { params: { limit: 500 }, timeout: 8000 }
+      );
+
+      const payload = res?.data;
+      const messages = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload?.messages)
+        ? payload.messages
+        : [];
+
+      if (messages.length === lastMessageCount) continue;
+      lastMessageCount = messages.length;
+
+      // Find the last assistant message
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        const role = msg?.role ?? msg?.type ?? "";
+        if (typeof role === "string" && role.toLowerCase() !== "assistant") continue;
+
+        // Check text field (simple string content)
+        const text = msg?.text ?? msg?.content ?? "";
+        if (typeof text === "string" && text.trim()) return text.trim();
+
+        // Check parts array (structured content)
+        const parts = msg?.parts ?? msg?.content?.parts ?? [];
+        for (const part of parts) {
+          if (part?.type === "text" && part?.text?.trim()) {
+            return part.text.trim();
+          }
+        }
+      }
+    } catch {
+      // Keep polling
+    }
+  }
+
+  return "";
+}
+
+/**
  * Send a prompt to a session and return the reply text.
  * Uses POST /session/{id}/message { parts: [{ type: "text", text }], agent? }
+ * Falls back to polling for reply if direct response is empty.
  */
 export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const payload = { parts: [{ type: "text", text }] };
   if (agent) payload.agent = agent;
-
-  // Start SSE listener BEFORE sending — events may fire as soon as the POST is received
-  const ssePromise = collectSSEvents(baseUrl, sessionId, 30000);
-
-  // Small delay to let SSE connection establish before the POST fires
-  await new Promise((r) => setTimeout(r, 200));
 
   let res;
   try {
@@ -165,8 +133,8 @@ export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const direct = extractReply(res.data);
   if (direct) return direct;
 
-  // Direct reply empty — wait for SSE reply
-  return ssePromise;
+  // Direct reply empty — poll for the reply (handles event stream delivery)
+  return pollForReply(baseUrl, sessionId, 30000);
 }
 
 /**
