@@ -85,14 +85,35 @@ export async function abortSession(baseUrl, sessionId) {
  */
 export async function listModes(baseUrl) {
   const res = await createClient(baseUrl).get("/agent", { timeout: 10_000 });
-  const rawAgents = Array.isArray(res?.data) ? res.data : [];
-  // Only return top-level orchestrators — filter out subagents (mode === "subagent")
-  return rawAgents
-    .filter((a) => a && typeof a === "object" && a.mode !== "subagent" && typeof a.name === "string")
-    .map((a) => ({
-      name: a.name.trim(),
-      description: typeof a.description === "string" ? a.description.trim() : "",
+  const rawAgents = Array.isArray(res?.data)
+    ? res.data
+    : Array.isArray(res?.data?.agents)
+    ? res.data.agents
+    : [];
+
+  const modes = rawAgents
+    .filter((agent) => agent && typeof agent === "object")
+    .filter((agent) => typeof agent.name === "string" && agent.name.trim() !== "")
+    .filter((agent) => {
+      const mode = typeof agent.mode === "string" ? agent.mode.toLowerCase() : "";
+      return mode !== "subagent";
+    })
+    .map((agent) => ({
+      name: agent.name.trim(),
+      description: typeof agent.description === "string" ? agent.description.trim() : "",
     }));
+
+  modes.sort((a, b) => {
+    const rank = (name) => {
+      const lower = name.toLowerCase();
+      if (lower === "build") return 0;
+      if (lower === "plan") return 1;
+      return 10;
+    };
+    return rank(a.name) - rank(b.name) || a.name.localeCompare(b.name);
+  });
+
+  return modes;
 }
 
 /**
