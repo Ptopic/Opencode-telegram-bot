@@ -316,6 +316,44 @@ async function handleRequest(req, res) {
       return jsonResponse(res, 200, { ok: true, sessionId: targetSessionId });
     }
 
+    // ── POST /project/start ─────────────────────────────────────────────
+    if (pathname === "/project/start" && method === "POST") {
+      const body = await parseBody(req);
+      const { project: projectPath } = body;
+      if (!projectPath) return errorResponse(res, 400, "Missing 'project' in request body");
+
+      try {
+        const { projectStartCommand } = await import("./commands/project.js");
+        // Start the instance (writes to state file)
+        await projectStartCommand(projectPath);
+        // Re-read state to get the new instance info
+        const state = readState();
+        const instance = findInstanceForPath(state, projectPath);
+        return jsonResponse(res, 200, {
+          ok: true,
+          projectPath,
+          instance: instance ? { baseUrl: instance.baseUrl, port: instance.port, pid: instance.pid, status: instance.status } : null,
+        });
+      } catch (err) {
+        return errorResponse(res, 500, `Failed to start project: ${err.message}`);
+      }
+    }
+
+    // ── POST /project/stop ───────────────────────────────────────────────
+    if (pathname === "/project/stop" && method === "POST") {
+      const body = await parseBody(req);
+      const { project: projectPath } = body;
+      if (!projectPath) return errorResponse(res, 400, "Missing 'project' in request body");
+
+      try {
+        const { projectStopCommand } = await import("./commands/project.js");
+        await projectStopCommand(projectPath);
+        return jsonResponse(res, 200, { ok: true, projectPath });
+      } catch (err) {
+        return errorResponse(res, 500, `Failed to stop project: ${err.message}`);
+      }
+    }
+
     // ── 404 ────────────────────────────────────────────────────────────────
     return errorResponse(res, 404, `Unknown route: ${method} ${pathname}`);
 
