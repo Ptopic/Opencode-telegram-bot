@@ -285,6 +285,21 @@ async function handleRequest(req, res) {
       }
     }
 
+    // ── TEMP DEBUG listModes ─────────────────────────────────────────────
+    if (pathname === "/debug/listmodes" && method === "GET") {
+      const state = readState();
+      const instances = Object.entries(state.instances ?? {});
+      if (!instances.length) return jsonResponse(res, 200, { note: "no instances" });
+      const [[p, inst]] = instances;
+      try {
+        const { listModes } = await import("./api-client.js");
+        const modes = await listModes(inst.baseUrl);
+        return jsonResponse(res, 200, { count: modes.length, modes: modes.map(m => m.name) });
+      } catch (err) {
+        return jsonResponse(res, 200, { error: err.message });
+      }
+    }
+
     // ── GET /modes/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/modes/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length));
