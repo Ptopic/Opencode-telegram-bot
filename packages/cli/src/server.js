@@ -321,6 +321,46 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // ── TEMP DEBUG SSE raw ────────────────────────────────────────────────
+    if (pathname === "/debug/sse" && method === "GET") {
+      const state = readState();
+      const sessionId = url.searchParams.get("session");
+      if (!sessionId) return errorResponse(res, 400, "Missing ?session=");
+      let baseUrl = null;
+      for (const inst of Object.values(state.instances ?? {})) {
+        if (inst?.status === "ready") { baseUrl = inst.baseUrl; break; }
+      }
+      if (!baseUrl) return errorResponse(res, 500, "No healthy instance");
+
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.flushHeaders();
+
+      // Stream raw SSE from /global/event to see what it looks like
+      try {
+        const sseRes = await fetch(`${baseUrl}/global/event`);
+        const reader = sseRes.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        let count = 0;
+        while (count < 30 && !res.writableEnded) {
+          const { done, chunk } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(chunk, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const l of lines) {
+            if (l.trim()) res.write(l + "\n");
+          }
+          count++;
+        }
+      } catch (err) {
+        res.write(`error: ${err.message}\n`);
+      }
+      res.end();
+      return;
+    }
+
     // ── GET /modes/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/modes/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length));
