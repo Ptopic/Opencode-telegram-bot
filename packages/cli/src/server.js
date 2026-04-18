@@ -532,7 +532,7 @@ async function startFileWatcher() {
   const path = req("node:path");
   const { fileURLToPath } = req("node:url");
 
-  const repoRoot = path.resolve(fileURLToPath(import.meta.url), "..", "..");
+  const repoRoot = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..");
   const watchDir = path.join(repoRoot, "packages", "cli", "src");
   let debounceTimer = null;
 
