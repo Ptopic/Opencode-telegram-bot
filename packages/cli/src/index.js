@@ -374,10 +374,31 @@ async function getOrCreateAttachBaseUrl(rawValue, projectDirectory) {
     if (instance && instance.baseUrl && instance.status === "ready") {
         const inUse = await isPortInUse(instance.port);
         if (inUse) {
-            console.log(`Found matching instance for ${projectDirectory}: ${instance.baseUrl}`);
-            return instance.baseUrl;
+            // Port is bound — verify PID is alive and server is healthy
+            let pidAlive = false;
+            if (typeof instance.pid === "number") {
+                try { process.kill(instance.pid, 0); pidAlive = true; } catch { pidAlive = false; }
+            }
+            if (pidAlive) {
+                const health = await probeHealth(instance.baseUrl, 2000);
+                if (health.ok) {
+                    console.log(`Found matching instance for ${projectDirectory}: ${instance.baseUrl}`);
+                    return instance.baseUrl;
+                }
+                console.log(`Instance found but unhealthy (${health.reason}), killing stale PID...`);
+                try { process.kill(instance.pid, "SIGTERM"); } catch {}
+                await new Promise((r) => setTimeout(r, 1000));
+                try { process.kill(instance.pid, "SIGKILL"); } catch {}
+            } else {
+                console.log(`Instance found but PID ${instance.pid} is dead — will spawn new`);
+            }
+            // Clean stale entry and fall through to spawn
+            const state = readInstanceState();
+            delete state.instances?.[projectDirectory];
+            saveInstanceState(state);
+        } else {
+            console.log(`Instance found but port not in use — will spawn new`);
         }
-        console.log(`Instance found but port not in use — will spawn new`);
     }
 
     console.log(`No matching instance found for ${projectDirectory}`);
@@ -583,12 +604,25 @@ const runManagedMode = runAllMode;
 
 async function runAttachMode(rawBaseUrl) {
     const projectDirectory = path.resolve(process.env.INIT_CWD || process.env.PWD || process.cwd());
-    const baseUrl = await getOrCreateAttachBaseUrl(rawBaseUrl, projectDirectory);
+
+    let baseUrl;
+    try {
+        baseUrl = await getOrCreateAttachBaseUrl(rawBaseUrl, projectDirectory);
+    } catch (err) {
+        console.error(`Failed to get/create instance: ${err.message}`);
+        return 1;
+    }
 
     console.log(`Creating session for ${projectDirectory}`);
     console.log(`Using OpenCode server ${baseUrl}`);
 
-    const sessionId = await createSessionForCurrentDirectory(baseUrl, projectDirectory);
+    let sessionId;
+    try {
+        sessionId = await createSessionForCurrentDirectory(baseUrl, projectDirectory);
+    } catch (err) {
+        console.error(`Failed to create session: ${err.message}`);
+        return 1;
+    }
     console.log(`Created session ${sessionId}`);
 
     console.log(`[attach] Spawning: opencode attach --session ${sessionId} --dir ${projectDirectory} ${baseUrl}`);
