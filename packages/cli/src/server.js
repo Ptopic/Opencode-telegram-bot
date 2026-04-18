@@ -516,7 +516,7 @@ export function startServer(port = 4097, { watch = false } = {}) {
     console.log("  POST /stop                — abort session { project, sessionId? }");
     if (watch) {
       console.log("\n🔁 Watch mode enabled — restarting on file changes...");
-      startFileWatcher();
+      startFileWatcher().catch(console.error);
     }
   });
 
@@ -524,9 +524,8 @@ export function startServer(port = 4097, { watch = false } = {}) {
 }
 
 // ── File watcher for --watch mode ─────────────────────────────────────────────
-function startFileWatcher() {
-  // ESM-compatible dynamic imports
-  const { createRequire } = require("node:module");
+async function startFileWatcher() {
+  const { createRequire } = await import("node:module");
   const req = createRequire(import.meta.url);
   const fs = req("node:fs");
   const { spawn } = req("node:child_process");
