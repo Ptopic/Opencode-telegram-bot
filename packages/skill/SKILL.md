@@ -111,6 +111,26 @@ opencode-telegram session new <project-path>
 opencode-telegram session switch <project-path> <session-id>
 ```
 
+### Agent mode selection
+```bash
+opencode-telegram mode list --project <project-path>   # List available agents
+opencode-telegram mode <index-or-name> --project <project-path>  # Set active agent
+```
+
+Examples:
+```bash
+opencode-telegram mode list --project /Users/petartopic/Desktop/Petar/my-project
+opencode-telegram mode 0 --project /Users/petartopic/Desktop/Petar/my-project  # By index
+opencode-telegram mode Sisyphus --project /Users/petartopic/Desktop/Petar/my-project  # By name
+```
+
+**Available agents** (fetched from OpenCode `/agent` endpoint, filtered to non-subagent):
+- `build` — Default coding agent
+- `plan` — Planning mode
+- Others depend on OpenCode configuration
+
+**Important:** Mode is stored per-project in state file (`~/.opencode-telegram-instances.json`) alongside sessionId. When you switch or create a session, the mode is preserved — no need to re-set it.
+
 ### Send a prompt
 ```bash
 opencode-telegram send "fix the login bug" --project <project-path>

@@ -177,9 +177,13 @@ async function handleRequest(req, res) {
         cwd: projectPath,
       });
 
-      // Auto-select it
+      // Auto-select it, preserving any existing mode
       state.activeSession = state.activeSession ?? {};
-      state.activeSession[projectPath] = session.id;
+      const existing = state.activeSession[projectPath];
+      state.activeSession[projectPath] = {
+        ...(typeof existing === "object" && existing !== null ? existing : {}),
+        sessionId: session.id,
+      };
 
       return jsonResponse(res, 201, { session, activeSessionId: session.id });
     }
@@ -388,7 +392,8 @@ async function handleRequest(req, res) {
       if (!instance || instance.status !== "ready") {
         return errorResponse(res, 404, "No running instance for this project");
       }
-      const sessionId = body.sessionId ?? state?.activeSession?.[projectPath];
+      const sessionData = state?.activeSession?.[projectPath];
+      const sessionId = body.sessionId ?? (typeof sessionData === "string" ? sessionData : sessionData?.sessionId);
       if (!sessionId) {
         return errorResponse(res, 400, "No active session");
       }

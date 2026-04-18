@@ -85,9 +85,13 @@ export async function switchSessionCommand(projectPath, targetSessionId) {
     process.exit(1);
   }
 
-  // Persist the active session
+  // Persist the active session, preserving any existing mode
   state.activeSession = state.activeSession ?? {};
-  state.activeSession[projectPath] = targetSessionId;
+  const existing = state.activeSession[projectPath];
+  state.activeSession[projectPath] = {
+    ...(typeof existing === "object" && existing !== null ? existing : {}),
+    sessionId: targetSessionId,
+  };
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 
   console.log(`Switched to session ${targetSessionId} for ${projectPath}`);
@@ -117,12 +121,19 @@ export async function newSessionCommand(projectPath) {
   console.log(`  Title: ${title}`);
   console.log(`  Project: ${projectPath}`);
 
-  // Auto-select it
+  // Auto-select it, preserving any existing mode
   state.activeSession = state.activeSession ?? {};
-  state.activeSession[projectPath] = session.id;
+  const existing = state.activeSession[projectPath];
+  state.activeSession[projectPath] = {
+    ...(typeof existing === "object" && existing !== null ? existing : {}),
+    sessionId: session.id,
+  };
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
 function findCurrentSessionId(state, projectPath) {
-  return state?.activeSession?.[projectPath] ?? null;
+  const val = state?.activeSession?.[projectPath];
+  if (!val) return null;
+  if (typeof val === "string") return val;
+  return val.sessionId ?? null;
 }
