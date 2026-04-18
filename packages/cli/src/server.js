@@ -268,23 +268,6 @@ async function handleRequest(req, res) {
       return;
     }
 
-    // ── TEMP DEBUG ──────────────────────────────────────────────────────
-    if (pathname === "/debug/agent" && method === "GET") {
-      const state = readState();
-      const instances = Object.entries(state.instances ?? {});
-      if (!instances.length) return jsonResponse(res, 200, { note: "no instances" });
-      const [[p, inst]] = instances;
-      try {
-        const raw = await fetch(`${inst.baseUrl}/agent`, { signal: AbortSignal.timeout(5000) });
-        const text = await raw.text();
-        let json = null;
-        try { json = JSON.parse(text); } catch {}
-        return jsonResponse(res, 200, { status: raw.status, isArray: Array.isArray(json), data: json });
-      } catch (err) {
-        return jsonResponse(res, 200, { error: err.message });
-      }
-    }
-
     // ── GET /modes/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/modes/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length));

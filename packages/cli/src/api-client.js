@@ -86,10 +86,9 @@ export async function abortSession(baseUrl, sessionId) {
 export async function listModes(baseUrl) {
   const res = await createClient(baseUrl).get("/agent", { timeout: 10_000 });
   const rawAgents = Array.isArray(res?.data) ? res.data : [];
-  // Only return the top-level orchestrator agents, not internal subagents
-  const MAIN_AGENTS = new Set(["Sisyphus", "Hephaestus", "Prometheus", "Atlas"]);
+  // Only return top-level orchestrators — filter out subagents (mode === "subagent")
   return rawAgents
-    .filter((a) => a && typeof a === "object" && typeof a.name === "string" && MAIN_AGENTS.has(a.name))
+    .filter((a) => a && typeof a === "object" && a.mode !== "subagent" && typeof a.name === "string")
     .map((a) => ({
       name: a.name.trim(),
       description: typeof a.description === "string" ? a.description.trim() : "",
