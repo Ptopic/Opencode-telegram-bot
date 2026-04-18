@@ -268,15 +268,19 @@ async function handleRequest(req, res) {
       return;
     }
 
-    // ── DEBUG: raw /agents endpoint ───────────────────────────────────
-    if (pathname === "/debug/agents" && method === "GET") {
+    // ── DEBUG: raw /agent endpoint ────────────────────────────────────
+    if (pathname === "/debug/agent" && method === "GET") {
       const instances = Object.entries(readState().instances ?? {});
-      if (!instances.length) return jsonResponse(res, 200, { agents: null, note: "no instances" });
+      if (!instances.length) return jsonResponse(res, 200, { note: "no instances" });
       const [[projectPath, instance]] = instances;
       try {
-        const raw = await fetch(`${instance.baseUrl}/agents`);
+        const raw = await fetch(`${instance.baseUrl}/agent`, {
+          headers: { "Accept": "application/json", "User-Agent": "opencode-telegram-cli" },
+        });
         const text = await raw.text();
-        return jsonResponse(res, 200, { status: raw.status, body: text.slice(0, 1000) });
+        let json = null;
+        try { json = JSON.parse(text); } catch {}
+        return jsonResponse(res, 200, { status: raw.status, contentType: raw.headers.get("content-type"), text: text.slice(0, 500), json });
       } catch (err) {
         return jsonResponse(res, 200, { error: err.message });
       }
