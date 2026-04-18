@@ -755,7 +755,8 @@ if (command === "start") {
 if (command === "serve") {
     const port = parseInt(args.find((a) => a.startsWith("--port="))?.split("=")[1] ?? "4097", 10);
     startServer(port);
-    // Server runs indefinitely; don't exit
+    // Keep the process alive — prevent Node from exiting when stdin closes
+    process.stdin.resume();
     await new Promise(() => {});
 }
 
