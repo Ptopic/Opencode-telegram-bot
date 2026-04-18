@@ -64,12 +64,152 @@ export async function deleteSession(baseUrl, sessionId) {
 /**
  * Send a prompt to a session and return the reply text.
  * Uses POST /session/{id}/message { parts: [{ type: "text", text }], agent? }
+ * Falls back to SSE event stream if direct reply is empty (mirrors Telegram bot behavior).
  */
 export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const payload = { parts: [{ type: "text", text }] };
   if (agent) payload.agent = agent;
   const res = await createClient(baseUrl).post(`/session/${sessionId}/message`, payload);
-  return extractReply(res.data);
+  const directReply = extractReply(res.data);
+  if (directReply) return directReply;
+
+  // Direct reply empty — recover via SSE event stream (same as Telegram bot)
+  return recoverReplyFromEventStream(baseUrl, sessionId);
+}
+
+// ── SSE recovery helpers (mirrors Telegram bot) ──────────────────────────────
+
+function unwrapSsePayload(payload) {
+  if (payload && typeof payload === "object" && payload.payload && typeof payload.payload === "object") {
+    return payload.payload;
+  }
+  return payload;
+}
+
+function getEventSessionId(event) {
+  for (const key of [
+    "sessionID", "sessionId", "session.id",
+    "info.sessionID", "info.sessionId", "info.session.id",
+    "properties.sessionID", "properties.sessionId", "properties.session.id",
+    "properties.info.sessionID", "properties.info.sessionId",
+  ]) {
+    const val = key.includes(".")
+      ? key.split(".").reduce((o, k) => o?.[k], event)
+      : event?.[key];
+    if (typeof val === "string" && val) return val;
+  }
+  return null;
+}
+
+function parseSseJsonEvents(chunkBuffer) {
+  const events = [];
+  let buffer = chunkBuffer;
+  let sep;
+  while ((sep = buffer.indexOf("\n\n")) >= 0) {
+    const frame = buffer.slice(0, sep);
+    buffer = buffer.slice(sep + 2);
+    const lines = frame.split("\n");
+    const dataLines = [];
+    for (const line of lines) {
+      if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+    }
+    const raw = dataLines.join("\n").trim();
+    if (raw && raw !== "[DONE]") {
+      try { events.push(JSON.parse(raw)); } catch {}
+    }
+  }
+  return { events, buffer };
+}
+
+async function fetchSessionMessages(baseUrl, sessionId) {
+  try {
+    const res = await createClient(baseUrl).get(`/session/${sessionId}/message`, {
+      timeout: 15000,
+      params: { limit: 500 },
+    });
+    const payload = res?.data;
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.messages)) return payload.messages;
+  } catch {}
+  return [];
+}
+
+function extractReplyFromMessages(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const text = extractReply(messages[i]);
+    if (text) return text;
+  }
+  return "";
+}
+
+async function waitForSessionIdle(baseUrl, sessionId, timeoutMs = 60000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const controller = new AbortController();
+    const remaining = Math.max(deadline - Date.now(), 1);
+    const timer = setTimeout(() => controller.abort(), remaining);
+
+    try {
+      let response = await fetch(`${baseUrl}/event`, {
+        headers: { Accept: "text/event-stream" },
+        signal: controller.signal,
+      });
+      if (!response.ok || !response.body) {
+        response = await fetch(`${baseUrl}/global/event`, {
+          headers: { Accept: "text/event-stream" },
+          signal: controller.signal,
+        });
+      }
+      if (!response.ok || !response.body) throw new Error(`Event stream unavailable (${response.status})`);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (Date.now() < deadline) {
+        const { done, value } = await reader.read();
+        if (done || !value) break;
+
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+        const { events, buffer: newBuf } = parseSseJsonEvents(buffer);
+        buffer = newBuf;
+
+        for (const rawEvent of events) {
+          const event = unwrapSsePayload(rawEvent);
+          if (!event || typeof event !== "object") continue;
+          if (getEventSessionId(event) !== sessionId) continue;
+
+          const eventType = typeof event.type === "string" ? event.type : "";
+          if (eventType === "session.idle") {
+            clearTimeout(timer);
+            controller.abort();
+            return;
+          }
+          if (eventType === "session.error") {
+            clearTimeout(timer);
+            controller.abort();
+            throw new Error(String(event?.properties?.error ?? event?.properties?.message ?? "session error"));
+          }
+        }
+      }
+    } catch {
+      // retry
+    } finally {
+      clearTimeout(timer);
+    }
+
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
+
+async function recoverReplyFromEventStream(baseUrl, sessionId) {
+  try {
+    await waitForSessionIdle(baseUrl, sessionId);
+    const messages = await fetchSessionMessages(baseUrl, sessionId);
+    return extractReplyFromMessages(messages);
+  } catch {
+    return "";
+  }
 }
 
 /**
