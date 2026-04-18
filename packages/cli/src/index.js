@@ -386,15 +386,24 @@ async function getOrCreateAttachBaseUrl(rawValue, projectDirectory) {
 }
 
 async function createSessionForCurrentDirectory(baseUrl, projectDirectory) {
-    const response = await fetch(`${baseUrl}/session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            title: defaultAttachSessionTitle(projectDirectory),
-            directory: projectDirectory,
-            cwd: projectDirectory,
-        }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    console.log(`[attach] Creating session at ${baseUrl}/session...`);
+    let response;
+    try {
+        response = await fetch(`${baseUrl}/session`, {
+            signal: controller.signal,
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                title: defaultAttachSessionTitle(projectDirectory),
+                directory: projectDirectory,
+                cwd: projectDirectory,
+            }),
+        });
+    } finally {
+        clearTimeout(timeout);
+    }
 
     if (!response.ok) {
         const body = await response.text();
