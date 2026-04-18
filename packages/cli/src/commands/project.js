@@ -249,8 +249,8 @@ async function stopInstanceForProject(projectDirectory) {
 
 export async function projectStartCommand(projectPath) {
   if (!projectPath) {
-    console.error("Usage: opencode-telegram project start <project-path>");
-    process.exit(1);
+    projectPath = process.cwd();
+    console.log(`No path given — using current directory: ${projectPath}`);
   }
 
   const state = readState();
@@ -276,8 +276,8 @@ export async function projectStartCommand(projectPath) {
 
 export async function projectStopCommand(projectPath) {
   if (!projectPath) {
-    console.error("Usage: opencode-telegram project stop <project-path>");
-    process.exit(1);
+    projectPath = process.cwd();
+    console.log(`No path given — using current directory: ${projectPath}`);
   }
 
   try {

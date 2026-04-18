@@ -97,6 +97,7 @@ opencode-telegram projects list
 ### Start/stop project instances
 ```bash
 opencode-telegram project start /Users/petartopic/Desktop/Petar/my-project
+opencode-telegram project start              # uses current directory
 opencode-telegram project stop /Users/petartopic/Desktop/Petar/my-project
 opencode-telegram project list
 ```

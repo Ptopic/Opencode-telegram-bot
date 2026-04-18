@@ -21,8 +21,8 @@ COMMANDS
 
   Projects
     projects list               List all projects and their running status
-    project start <path>        Start OpenCode server instance for a project
-    project stop <path>         Stop OpenCode server instance for a project
+    project start [path]       Start OpenCode server instance (defaults to cwd)
+    project stop [path]          Stop OpenCode server instance (defaults to cwd)
     project list                List running instances
 
   Sessions
@@ -57,6 +57,7 @@ EXAMPLES
   opencode-telegram stop --project /Users/petartopic/Desktop/Petar/my-project
   opencode-telegram mode agent --project /Users/petartopic/Desktop/Profico/web-app
   opencode-telegram watch /Users/petartopic/Desktop/Petar/my-project
+  opencode-telegram project start
   opencode-telegram project start /Users/petartopic/Desktop/Petar/my-project
   opencode-telegram project stop /Users/petartopic/Desktop/Petar/my-project
   opencode-telegram watch /Users/petartopic/Desktop/Petar/my-project --interval=1000
