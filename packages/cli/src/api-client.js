@@ -70,23 +70,33 @@ export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const payload = { parts: [{ type: "text", text }] };
   if (agent) payload.agent = agent;
 
-  // Count messages BEFORE sending — we only want messages added by this request
+  // Count messages before sending so we only extract new ones
   const beforeMessages = await fetchSessionMessages(baseUrl, sessionId);
   const beforeCount = beforeMessages.length;
 
-  // Start SSE listener BEFORE the POST (same timing as Telegram bot).
-  // This ensures we don't miss session.idle if it fires before POST returns.
-  const ssePromise = startSseListener(baseUrl, sessionId);
-
   const res = await createClient(baseUrl).post(`/session/${sessionId}/message`, payload);
   const directReply = extractReply(res.data);
-  if (directReply) {
-    ssePromise.cancel();
-    return directReply;
-  }
+  if (directReply) return directReply;
 
-  // Direct reply empty — wait for SSE recovery, only looking at new messages
-  return ssePromise.finish(beforeCount);
+  // Direct reply empty — poll for new messages until we get a response
+  return pollForReply(baseUrl, sessionId, beforeCount, 55000);
+}
+
+/**
+ * Poll /session/{id}/message until a new assistant message appears.
+ * Uses beforeCount to only look at messages added after the request.
+ */
+async function pollForReply(baseUrl, sessionId, beforeCount, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 800));
+    const messages = await fetchSessionMessages(baseUrl, sessionId);
+    if (messages.length > beforeCount) {
+      const reply = extractReplyFromMessages(messages, beforeCount);
+      if (reply) return reply;
+    }
+  }
+  return "";
 }
 
 /**
@@ -141,49 +151,7 @@ function startSseListener(baseUrl, sessionId) {
   };
 }
 
-// ── SSE recovery helpers (mirrors Telegram bot) ──────────────────────────────
 
-function unwrapSsePayload(payload) {
-  if (payload && typeof payload === "object" && payload.payload && typeof payload.payload === "object") {
-    return payload.payload;
-  }
-  return payload;
-}
-
-function getEventSessionId(event) {
-  for (const key of [
-    "sessionID", "sessionId", "session.id",
-    "info.sessionID", "info.sessionId", "info.session.id",
-    "properties.sessionID", "properties.sessionId", "properties.session.id",
-    "properties.info.sessionID", "properties.info.sessionId",
-  ]) {
-    const val = key.includes(".")
-      ? key.split(".").reduce((o, k) => o?.[k], event)
-      : event?.[key];
-    if (typeof val === "string" && val) return val;
-  }
-  return null;
-}
-
-function parseSseJsonEvents(chunkBuffer) {
-  const events = [];
-  let buffer = chunkBuffer;
-  let sep;
-  while ((sep = buffer.indexOf("\n\n")) >= 0) {
-    const frame = buffer.slice(0, sep);
-    buffer = buffer.slice(sep + 2);
-    const lines = frame.split("\n");
-    const dataLines = [];
-    for (const line of lines) {
-      if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
-    }
-    const raw = dataLines.join("\n").trim();
-    if (raw && raw !== "[DONE]") {
-      try { events.push(JSON.parse(raw)); } catch {}
-    }
-  }
-  return { events, buffer };
-}
 
 async function fetchSessionMessages(baseUrl, sessionId) {
   try {
