@@ -69,12 +69,65 @@ export async function deleteSession(baseUrl, sessionId) {
 export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const payload = { parts: [{ type: "text", text }] };
   if (agent) payload.agent = agent;
+
+  // Start SSE listener BEFORE the POST (same timing as Telegram bot).
+  // This ensures we don't miss session.idle if it fires before POST returns.
+  const ssePromise = startSseListener(baseUrl, sessionId);
+
   const res = await createClient(baseUrl).post(`/session/${sessionId}/message`, payload);
   const directReply = extractReply(res.data);
-  if (directReply) return directReply;
+  if (directReply) {
+    ssePromise.cancel();
+    return directReply;
+  }
 
-  // Direct reply empty — recover via SSE event stream (same as Telegram bot)
-  return recoverReplyFromEventStream(baseUrl, sessionId);
+  // Direct reply empty — wait for SSE recovery
+  return ssePromise.finish();
+}
+
+/**
+ * Starts an SSE listener for session.idle before POST is sent.
+ * Mirrors Telegram bot's pre-POST SSE connection timing.
+ */
+function startSseListener(baseUrl, sessionId) {
+  let finish; // call this to stop listening and get the reply
+  let cancel;
+
+  const promise = new Promise((resolve) => {
+    finish = async () => {
+      try {
+        return await waitForSessionIdle(baseUrl, sessionId);
+      } catch {
+        return "";
+      }
+    };
+    cancel = () => {};
+    resolve();
+  });
+
+  // Replace with actual finish/cancel after construction
+  const controller = new AbortController();
+  let settled = false;
+
+  const waitTask = (async () => {
+    try {
+      await waitForSessionIdle(baseUrl, sessionId, 55000);
+      if (settled) return;
+      settled = true;
+      const messages = await fetchSessionMessages(baseUrl, sessionId);
+      return extractReplyFromMessages(messages);
+    } catch {
+      return "";
+    }
+  })();
+
+  return {
+    cancel: () => { controller.abort(); },
+    finish: async () => {
+      const result = await waitTask;
+      return result ?? "";
+    },
+  };
 }
 
 // ── SSE recovery helpers (mirrors Telegram bot) ──────────────────────────────
