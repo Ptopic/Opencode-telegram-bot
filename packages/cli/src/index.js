@@ -575,11 +575,13 @@ async function runAttachMode(rawBaseUrl) {
     const sessionId = await createSessionForCurrentDirectory(baseUrl, projectDirectory);
     console.log(`Created session ${sessionId}`);
 
+    console.log(`[attach] Spawning: opencode attach --session ${sessionId} --dir ${projectDirectory} ${baseUrl}`);
     const child = spawn("opencode", ["attach", "--session", sessionId, "--dir", projectDirectory, baseUrl], {
         stdio: "inherit",
         env: process.env,
         cwd: projectDirectory,
     });
+    child.on("error", (err) => console.error(`[attach] spawn error: ${err.message}`));
 
     const { code, signal } = await waitForChildExit(child);
     if (typeof code === "number") {
