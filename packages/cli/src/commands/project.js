@@ -130,6 +130,28 @@ async function spawnInstanceForProject(projectDirectory) {
     if (health.ok) {
       return existing;
     }
+    // Check if PID is still alive right now
+    if (typeof existing.pid === "number") {
+      try {
+        process.kill(existing.pid, 0);
+        console.log(`[spawn] PID ${existing.pid} is ALIVE but health probe failed — state stale, will reuse port`);
+        // PID alive but port not responding: reuse the same port
+        const port = existing.port;
+        const baseUrl = existing.baseUrl;
+        const state = readState();
+        // Retry health with longer timeout
+        const retryHealth = await probeHealth(baseUrl, 10000);
+        if (retryHealth.ok) {
+          return { baseUrl, port, pid: existing.pid };
+        }
+        console.log(`[spawn] PID alive but server unresponsive after retry — will respawn on new port`);
+      } catch (err) {
+        console.log(`[spawn] PID ${existing.pid} is DEAD (${err.message}) — cleaning up state`);
+        const state = readState();
+        delete state.instances[projectDirectory];
+        saveState(state);
+      }
+    }
   }
   const port = await allocatePort(state);
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -183,6 +205,7 @@ async function spawnInstanceForProject(projectDirectory) {
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
+    child.unref();
 
     child.on("error", rejectOnce);
     child.on("exit", (code, signal) => {
@@ -264,11 +287,17 @@ export async function projectStartCommand(projectPath) {
 
   const state = readState();
   const existing = findInstanceForPath(state, projectPath);
-  if (existing && existing.status === "ready") {
-    const health = await probeHealth(existing.baseUrl, 2000);
-    if (health.ok) {
-      console.log(`Already running: ${existing.baseUrl}`);
-      return;
+  console.log(`[project start] instances in state: ${JSON.stringify(state.instances)}`);
+  if (existing) {
+    console.log(`[project start] existing entry found, PID=${existing.pid}, port=${existing.port}`);
+    // Check if PID is alive right now
+    if (typeof existing.pid === "number") {
+      try {
+        process.kill(existing.pid, 0);
+        console.log(`[project start] PID ${existing.pid} IS alive`);
+      } catch (e) {
+        console.log(`[project start] PID ${existing.pid} IS DEAD: ${e.message}`);
+      }
     }
   }
 
