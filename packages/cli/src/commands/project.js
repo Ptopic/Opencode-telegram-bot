@@ -126,32 +126,14 @@ async function spawnInstanceForProject(projectDirectory) {
   const state = readState();
   const existing = findInstanceForPath(state, projectDirectory);
   if (existing && existing.status === "ready") {
-    const health = await probeHealth(existing.baseUrl, 2000);
-    if (health.ok) {
-      return existing;
+    // PID is alive but health probe may time out if server is slow to start.
+    // Instead of relying on HTTP health, check if the port is actually in use.
+    const portInUse = await isPortInUse(existing.port);
+    if (portInUse) {
+      console.log(`[spawn] Port ${existing.port} is in use by PID ${existing.pid} — reusing existing instance`);
+      return { baseUrl: existing.baseUrl, port: existing.port, pid: existing.pid };
     }
-    // Check if PID is still alive right now
-    if (typeof existing.pid === "number") {
-      try {
-        process.kill(existing.pid, 0);
-        console.log(`[spawn] PID ${existing.pid} is ALIVE but health probe failed — state stale, will reuse port`);
-        // PID alive but port not responding: reuse the same port
-        const port = existing.port;
-        const baseUrl = existing.baseUrl;
-        const state = readState();
-        // Retry health with longer timeout
-        const retryHealth = await probeHealth(baseUrl, 10000);
-        if (retryHealth.ok) {
-          return { baseUrl, port, pid: existing.pid };
-        }
-        console.log(`[spawn] PID alive but server unresponsive after retry — will respawn on new port`);
-      } catch (err) {
-        console.log(`[spawn] PID ${existing.pid} is DEAD (${err.message}) — cleaning up state`);
-        const state = readState();
-        delete state.instances[projectDirectory];
-        saveState(state);
-      }
-    }
+    console.log(`[spawn] PID ${existing.pid} alive but port ${existing.port} not in use — stale, will respawn`);
   }
   const port = await allocatePort(state);
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -287,19 +269,6 @@ export async function projectStartCommand(projectPath) {
 
   const state = readState();
   const existing = findInstanceForPath(state, projectPath);
-  console.log(`[project start] instances in state: ${JSON.stringify(state.instances)}`);
-  if (existing) {
-    console.log(`[project start] existing entry found, PID=${existing.pid}, port=${existing.port}`);
-    // Check if PID is alive right now
-    if (typeof existing.pid === "number") {
-      try {
-        process.kill(existing.pid, 0);
-        console.log(`[project start] PID ${existing.pid} IS alive`);
-      } catch (e) {
-        console.log(`[project start] PID ${existing.pid} IS DEAD: ${e.message}`);
-      }
-    }
-  }
 
   try {
     const instance = await spawnInstanceForProject(projectPath);
