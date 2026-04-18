@@ -70,6 +70,10 @@ export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const payload = { parts: [{ type: "text", text }] };
   if (agent) payload.agent = agent;
 
+  // Count messages BEFORE sending — we only want messages added by this request
+  const beforeMessages = await fetchSessionMessages(baseUrl, sessionId);
+  const beforeCount = beforeMessages.length;
+
   // Start SSE listener BEFORE the POST (same timing as Telegram bot).
   // This ensures we don't miss session.idle if it fires before POST returns.
   const ssePromise = startSseListener(baseUrl, sessionId);
@@ -81,8 +85,8 @@ export async function sendPrompt(baseUrl, sessionId, text, agent) {
     return directReply;
   }
 
-  // Direct reply empty — wait for SSE recovery
-  return ssePromise.finish();
+  // Direct reply empty — wait for SSE recovery, only looking at new messages
+  return ssePromise.finish(beforeCount);
 }
 
 /**
@@ -123,9 +127,16 @@ function startSseListener(baseUrl, sessionId) {
 
   return {
     cancel: () => { controller.abort(); },
-    finish: async () => {
-      const result = await waitTask;
-      return result ?? "";
+    finish: async (beforeCount = 0) => {
+      // Wait for session.idle
+      try {
+        await waitForSessionIdle(baseUrl, sessionId, 55000);
+      } catch {
+        return "";
+      }
+      // Fetch messages and only look at new ones added after our request
+      const messages = await fetchSessionMessages(baseUrl, sessionId);
+      return extractReplyFromMessages(messages, beforeCount);
     },
   };
 }
@@ -187,10 +198,19 @@ async function fetchSessionMessages(baseUrl, sessionId) {
   return [];
 }
 
-function extractReplyFromMessages(messages) {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const text = extractReply(messages[i]);
+function extractReplyFromMessages(messages, beforeCount = 0) {
+  // Only look at messages added after the request was sent
+  const newMessages = messages.slice(beforeCount);
+  for (let i = newMessages.length - 1; i >= 0; i--) {
+    const text = extractReply(newMessages[i]);
     if (text) return text;
+  }
+  // Fallback: if no new messages, try all messages (handles timing edge cases)
+  if (!newMessages.length) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const text = extractReply(messages[i]);
+      if (text) return text;
+    }
   }
   return "";
 }
