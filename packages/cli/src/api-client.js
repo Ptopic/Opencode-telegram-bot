@@ -68,8 +68,36 @@ export async function deleteSession(baseUrl, sessionId) {
 export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const payload = { parts: [{ type: "text", text }] };
   if (agent) payload.agent = agent;
-  const res = await createClient(baseUrl).post(`/session/${sessionId}/message`, payload);
-  return extractReply(res.data);
+
+  let res;
+  try {
+    res = await createClient(baseUrl).post(`/session/${sessionId}/message`, payload);
+  } catch (err) {
+    // If the POST itself fails, that's a real error
+    throw err;
+  }
+
+  const direct = extractReply(res.data);
+  if (direct) return direct;
+
+  // Direct reply was empty — wait for the session to process and poll for the result
+  // This handles cases where the response is delivered via event stream rather than inline
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await new Promise((r) => setTimeout(r, 500));
+    try {
+      const msgs = await createClient(baseUrl).get(`/session/${sessionId}/message`);
+      const messages = msgs.data?.messages ?? msgs.data ?? [];
+      const last = Array.isArray(messages) ? messages[messages.length - 1] : null;
+      if (last) {
+        const fromLast = extractReply(last);
+        if (fromLast) return fromLast;
+      }
+    } catch {
+      // Ignore polling errors
+    }
+  }
+
+  return "";
 }
 
 /**
