@@ -274,6 +274,53 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // ── TEMP DEBUG SSE raw ────────────────────────────────────────────────
+    if (pathname === "/debug/sse" && method === "GET") {
+      const state = readState();
+      const sessionId = url.searchParams.get("session");
+      if (!sessionId) return errorResponse(res, 400, "Missing ?session=");
+      // Find which instance has this session
+      let baseUrl = null;
+      for (const inst of Object.values(state.instances ?? {})) {
+        if (inst?.status === "ready") {
+          baseUrl = inst.baseUrl;
+          break;
+        }
+      }
+      if (!baseUrl) return errorResponse(res, 500, "No healthy instance");
+
+      // Proxy SSE from /global/event
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      res.flushHeaders();
+
+      try {
+        const sseRes = await fetch(`${baseUrl}/global/event`, { signal: AbortSignal.timeout(5000) });
+        const reader = sseRes.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let count = 0;
+        while (count < 20) {
+          const { done, chunk } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(chunk, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (line.startsWith("data:") || line.startsWith("event:") || line.trim()) {
+              res.write(line + "\n");
+              count++;
+            }
+          }
+        }
+        res.end();
+      } catch (err) {
+        res.end(`error: ${err.message}\n`);
+      }
+      return;
+    }
+
     // ── GET /modes/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/modes/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length));

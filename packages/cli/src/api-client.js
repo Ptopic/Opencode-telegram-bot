@@ -149,9 +149,11 @@ export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const payload = { parts: [{ type: "text", text }] };
   if (agent) payload.agent = agent;
 
-  // Start SSE listener in parallel with sending the message
-  // Replies may come via event stream instead of HTTP response body
+  // Start SSE listener BEFORE sending — events may fire as soon as the POST is received
   const ssePromise = collectSSEvents(baseUrl, sessionId, 30000);
+
+  // Small delay to let SSE connection establish before the POST fires
+  await new Promise((r) => setTimeout(r, 200));
 
   let res;
   try {
