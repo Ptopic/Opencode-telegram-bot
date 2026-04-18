@@ -398,6 +398,15 @@ async function handleRequest(req, res) {
         return errorResponse(res, 400, "No active session");
       }
       await setMode(instance.baseUrl, sessionId, body.mode);
+
+      // Persist mode to local state file
+      state.activeSession = state.activeSession ?? {};
+      const existing = state.activeSession[projectPath];
+      state.activeSession[projectPath] = {
+        ...(typeof existing === "object" && existing !== null ? existing : {}),
+        mode: body.mode,
+      };
+
       return jsonResponse(res, 200, { ok: true, mode: body.mode, sessionId });
     }
 
