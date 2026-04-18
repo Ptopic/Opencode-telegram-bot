@@ -62,53 +62,96 @@ export async function deleteSession(baseUrl, sessionId) {
 }
 
 /**
- * Poll for reply by fetching session messages — mirrors bot's fetchSessionMessages.
- * Returns text from the last assistant message, or empty string on timeout.
+ * SSE event collector — mirrors the Telegram bot's SSE parsing exactly.
+ * Returns the first assistant message text from the event stream.
  */
-async function pollForReply(baseUrl, sessionId, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  let lastMessageCount = 0;
+async function collectSSEvents(baseUrl, sessionId, timeoutMs = 30000) {
+  const url = `${baseUrl}/global/event`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 800));
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
 
-    try {
-      const res = await createClient(baseUrl).get(
-        `/session/${sessionId}/message`,
-        { params: { limit: 500 }, timeout: 8000 }
-      );
+    while (true) {
+      const { done, chunk } = await reader.read();
+      if (done) break;
 
-      const payload = res?.data;
-      const messages = Array.isArray(payload)
-        ? payload
-        : Array.isArray(payload?.messages)
-        ? payload.messages
-        : [];
+      buffer += decoder.decode(chunk, { stream: true });
 
-      if (messages.length === lastMessageCount) continue;
-      lastMessageCount = messages.length;
+      // Split on SSE event boundary (double newline)
+      const eventBlocks = buffer.split("\n\n");
+      buffer = eventBlocks.pop() ?? "";
 
-      // Find the last assistant message
-      for (let i = messages.length - 1; i >= 0; i--) {
-        const msg = messages[i];
-        const role = msg?.role ?? msg?.type ?? "";
-        if (typeof role === "string" && role.toLowerCase() !== "assistant") continue;
+      for (const block of eventBlocks) {
+        const lines = block.split("\n");
+        // Collect all data: lines (SSE can have multi-line data)
+        const dataLines = [];
+        for (const line of lines) {
+          if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trimStart()); // trimStart, not trim
+          }
+        }
+        if (!dataLines.length) continue;
 
-        // Check text field (simple string content)
-        const text = msg?.text ?? msg?.content ?? "";
-        if (typeof text === "string" && text.trim()) return text.trim();
+        // Join multi-line data fields (same as bot's parseSseJsonEvents)
+        const joined = dataLines.join("\n");
+        if (joined === "[DONE]" || joined === "") continue;
 
-        // Check parts array (structured content)
-        const parts = msg?.parts ?? msg?.content?.parts ?? [];
-        for (const part of parts) {
-          if (part?.type === "text" && part?.text?.trim()) {
-            return part.text.trim();
+        let event;
+        try { event = JSON.parse(joined); } catch { continue; }
+
+        // Unwrap { payload: { ... } } wrapper (same as bot's unwrapSsePayload)
+        const payload = (event?.payload && typeof event.payload === "object")
+          ? event.payload
+          : event;
+
+        // Extract sessionId from many possible fields (same as bot's getEventSessionId)
+        const eventSid =
+          payload?.sessionID ??
+          payload?.sessionId ??
+          payload?.session?.id ??
+          payload?.info?.sessionID ??
+          payload?.info?.sessionId ??
+          payload?.info?.session?.id ??
+          payload?.properties?.sessionID ??
+          payload?.properties?.sessionId ??
+          payload?.properties?.session?.id ??
+          payload?.properties?.info?.sessionID ??
+          payload?.properties?.info?.sessionId ??
+          null;
+
+        if (eventSid && eventSid !== sessionId) continue;
+
+        // Look for assistant messages — same logic as bot's isAssistantLikeMessage
+        const messages = payload?.messages ?? payload?.data?.messages ?? [];
+        for (const msg of messages) {
+          const role = msg?.role ?? msg?.type ?? "";
+          if (typeof role === "string" && role.toLowerCase() !== "assistant") continue;
+
+          const text = msg?.text ?? msg?.content ?? "";
+          if (typeof text === "string" && text.trim()) {
+            clearTimeout(timeout);
+            return text.trim();
+          }
+
+          const parts = msg?.parts ?? msg?.content?.parts ?? [];
+          for (const part of parts) {
+            if (part?.type === "text" && part?.text?.trim()) {
+              clearTimeout(timeout);
+              return part.text.trim();
+            }
           }
         }
       }
-    } catch {
-      // Keep polling
     }
+  } catch {
+    // Timeout or error
+  } finally {
+    clearTimeout(timeout);
   }
 
   return "";
@@ -133,8 +176,8 @@ export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const direct = extractReply(res.data);
   if (direct) return direct;
 
-  // Direct reply empty — poll for the reply (handles event stream delivery)
-  return pollForReply(baseUrl, sessionId, 30000);
+  // Direct reply empty — use SSE event stream to get the reply
+  return collectSSEvents(baseUrl, sessionId, 30000);
 }
 
 /**
