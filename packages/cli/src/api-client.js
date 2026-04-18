@@ -81,10 +81,17 @@ export async function abortSession(baseUrl, sessionId) {
 
 /**
  * Get available agent modes.
+ * OpenCode /agent returns an array of agent descriptors.
  */
 export async function listModes(baseUrl) {
-  const res = await createClient(baseUrl).get("/agent", { timeout: 10_000 });
-  return res.data?.modes ?? [];
+  const res = await createClient(baseUrl).get("/agents", { timeout: 10_000 });
+  const rawAgents = Array.isArray(res?.data) ? res.data : Array.isArray(res?.data?.agents) ? res.data.agents : [];
+  return rawAgents
+    .filter((a) => a && typeof a === "object" && typeof a.name === "string" && a.name.trim())
+    .map((a) => ({
+      name: a.name.trim(),
+      description: typeof a.description === "string" ? a.description.trim() : "",
+    }));
 }
 
 /**
