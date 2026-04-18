@@ -84,7 +84,6 @@ opencode-telegram start all # Same as default
 
 - **Personal projects**: `/Users/petartopic/Desktop/Petar`
 - **Work projects**: `/Users/petartopic/Desktop/Profico`
-- **Employee-tracker**: `/Users/petartopic/Desktop/Petar/Employee-tracker`
 
 Each project gets its own OpenCode server instance (ports 50000–59999).
 
@@ -149,29 +148,29 @@ When Petar asks me to work on a project, I should:
 
 2. **Start project if needed:**
    ```bash
-   opencode-telegram project start /Users/petartopic/Desktop/Petar/Employee-tracker
+   opencode-telegram project start <project-path>
    ```
 
 3. **Create a new session (recommended for new tasks):**
    ```bash
-   opencode-telegram session new /Users/petartopic/Desktop/Petar/Employee-tracker
+   opencode-telegram session new <project-path>
    ```
 
 4. **List available modes and set by index:**
    ```bash
-   opencode-telegram mode list --project /Users/petartopic/Desktop/Petar/Employee-tracker
-   opencode-telegram mode 0 --project /Users/petartopic/Desktop/Petar/Employee-tracker
+   opencode-telegram mode list --project <project-path>
+   opencode-telegram mode 0 --project <project-path>
    ```
    Use index (0, 1, 2...) not agent names.
 
 5. **Send prompts:**
    ```bash
-   opencode-telegram send "implement the login feature" --project /Users/petartopic/Desktop/Petar/Employee-tracker
+   opencode-telegram send "implement the login feature" --project <project-path>
    ```
 
 6. **To stop execution:**
    ```bash
-   opencode-telegram stop --project /Users/petartopic/Desktop/Petar/Employee-tracker
+   opencode-telegram stop --project <project-path>
    ```
 
 ### Stop execution
