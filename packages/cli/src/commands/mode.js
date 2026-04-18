@@ -42,12 +42,16 @@ function findInstanceForPath(state, projectPath) {
 export async function listModesCommand(projectPath) {
   if (!projectPath) {
     const state = readState();
-    for (const [p, inst] of Object.entries(state.instances ?? {})) {
-      if (inst?.status === "ready") {
-        projectPath = p;
-        break;
+    // Prefer active session's project, then any ready instance
+    const activeProject = Object.keys(state.activeSession ?? {}).find(
+      (p) => state.instances?.[p]?.status === "ready"
+    );
+    projectPath = activeProject ?? (() => {
+      for (const [p, inst] of Object.entries(state.instances ?? {})) {
+        if (inst?.status === "ready") return p;
       }
-    }
+      return null;
+    })();
   }
 
   if (!projectPath) {
@@ -100,12 +104,16 @@ export async function setModeCommand(modeArg, projectPath) {
 
   if (!projectPath) {
     const state = readState();
-    for (const [p, inst] of Object.entries(state.instances ?? {})) {
-      if (inst?.status === "ready") {
-        projectPath = p;
-        break;
+    // Prefer active session's project, then any ready instance
+    const activeProject = Object.keys(state.activeSession ?? {}).find(
+      (p) => state.instances?.[p]?.status === "ready"
+    );
+    projectPath = activeProject ?? (() => {
+      for (const [p, inst] of Object.entries(state.instances ?? {})) {
+        if (inst?.status === "ready") return p;
       }
-    }
+      return null;
+    })();
   }
 
   if (!projectPath) {
