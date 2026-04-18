@@ -268,6 +268,20 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // ── DEBUG: raw /agents endpoint ───────────────────────────────────
+    if (pathname === "/debug/agents" && method === "GET") {
+      const instances = Object.entries(readState().instances ?? {});
+      if (!instances.length) return jsonResponse(res, 200, { agents: null, note: "no instances" });
+      const [[projectPath, instance]] = instances;
+      try {
+        const raw = await fetch(`${instance.baseUrl}/agents`);
+        const text = await raw.text();
+        return jsonResponse(res, 200, { status: raw.status, body: text.slice(0, 1000) });
+      } catch (err) {
+        return jsonResponse(res, 200, { error: err.message });
+      }
+    }
+
     // ── GET /modes/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/modes/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length));
