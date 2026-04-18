@@ -268,7 +268,7 @@ async function handleRequest(req, res) {
       return;
     }
 
-    // ── TEMP DEBUG raw /agent ─────────────────────────────────────────────
+    // ── TEMP DEBUG raw /agent with full detail ───────────────────────────
     if (pathname === "/debug/raw" && method === "GET") {
       const state = readState();
       const instances = Object.entries(state.instances ?? {});
@@ -279,7 +279,9 @@ async function handleRequest(req, res) {
         const text = await raw.text();
         let json = null;
         try { json = JSON.parse(text); } catch {}
-        return jsonResponse(res, 200, { status: raw.status, isArray: Array.isArray(json), keys: Object.keys(json ?? {}), total: Array.isArray(json) ? json.length : "n/a", sample: Array.isArray(json) ? json.slice(0,3).map(a => a?.name) : "not array" });
+        if (!Array.isArray(json)) return jsonResponse(res, 200, { notArray: true, keys: Object.keys(json ?? {}) });
+        const all = json.map(a => ({ name: a?.name, mode: a?.mode, rank_subagent: a?.mode?.toLowerCase() === "subagent", rank_primary: a?.mode?.toLowerCase() === "primary" }));
+        return jsonResponse(res, 200, { total: json.length, all });
       } catch (err) {
         return jsonResponse(res, 200, { error: err.message });
       }
