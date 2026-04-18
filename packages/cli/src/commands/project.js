@@ -126,14 +126,17 @@ async function spawnInstanceForProject(projectDirectory) {
   const state = readState();
   const existing = findInstanceForPath(state, projectDirectory);
   if (existing && existing.status === "ready") {
-    // PID is alive but health probe may time out if server is slow to start.
-    // Instead of relying on HTTP health, check if the port is actually in use.
     const portInUse = await isPortInUse(existing.port);
     if (portInUse) {
-      console.log(`[spawn] Port ${existing.port} is in use by PID ${existing.pid} — reusing existing instance`);
-      return { baseUrl: existing.baseUrl, port: existing.port, pid: existing.pid };
+      // Port is in use — wait for the HTTP server to actually respond
+      console.log(`[spawn] Port ${existing.port} in use — waiting for server to be healthy...`);
+      const health = await probeHealth(existing.baseUrl, 30_000);
+      if (health.ok) {
+        console.log(`[spawn] Server healthy at ${existing.baseUrl}`);
+        return { baseUrl: existing.baseUrl, port: existing.port, pid: existing.pid };
+      }
+      console.log(`[spawn] Server unhealthy after wait: ${health.reason} — will respawn`);
     }
-    console.log(`[spawn] PID ${existing.pid} alive but port ${existing.port} not in use — stale, will respawn`);
   }
   const port = await allocatePort(state);
   const baseUrl = `http://127.0.0.1:${port}`;

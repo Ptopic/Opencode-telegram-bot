@@ -386,24 +386,31 @@ async function getOrCreateAttachBaseUrl(rawValue, projectDirectory) {
 }
 
 async function createSessionForCurrentDirectory(baseUrl, projectDirectory) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
-    console.log(`[attach] Creating session at ${baseUrl}/session...`);
-    let response;
-    try {
-        response = await fetch(`${baseUrl}/session`, {
-            signal: controller.signal,
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                title: defaultAttachSessionTitle(projectDirectory),
-                directory: projectDirectory,
-                cwd: projectDirectory,
-            }),
-        });
-    } finally {
-        clearTimeout(timeout);
+    // Wait for the HTTP server to actually be ready (not just port bound)
+    const deadline = Date.now() + 30_000;
+    let serverReady = false;
+    while (Date.now() < deadline) {
+        try {
+            const res = await fetch(`${baseUrl}/global/health`, {
+                signal: AbortSignal.timeout(2000),
+            });
+            if (res.ok) { serverReady = true; break; }
+        } catch {}
+        await new Promise((r) => setTimeout(r, 500));
     }
+    if (!serverReady) {
+        throw new Error(`OpenCode server at ${baseUrl} did not respond to /global/health within 30s`);
+    }
+    console.log(`[attach] Server ready. Creating session...`);
+    const response = await fetch(`${baseUrl}/session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            title: defaultAttachSessionTitle(projectDirectory),
+            directory: projectDirectory,
+            cwd: projectDirectory,
+        }),
+    });
 
     if (!response.ok) {
         const body = await response.text();
