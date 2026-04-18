@@ -42,6 +42,8 @@ Keep both running (e.g. in a `screen` or `tmux` session).
 
 Base URL: `https://cli.petartopic.com`
 
+**Important:** I must use `https://cli.petartopic.com` as the base URL for all API calls. This is the cloudflared tunnel to Petar's Mac. Always prepend this to API paths.
+
 | Method | Path | Body | Description |
 |--------|------|------|-------------|
 | GET | `/health` | — | Server health + running instances |
