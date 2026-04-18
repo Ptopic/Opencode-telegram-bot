@@ -39,7 +39,17 @@ function findInstanceForPath(state, projectPath) {
   const normalized = projectPath.replace(/\/+$/, "").toLowerCase();
   for (const [p, inst] of Object.entries(state.instances ?? {})) {
     const np = p.replace(/\/+$/, "").toLowerCase();
-    if (np === normalized) return { projectPath: p, ...inst };
+    if (np !== normalized) continue;
+    // Verify the PID is still alive before returning the entry
+    if (typeof inst.pid === "number") {
+      try {
+        process.kill(inst.pid, 0); // signal 0 just checks if process exists
+      } catch {
+        // Process is dead — treat as no entry
+        return null;
+      }
+    }
+    return { projectPath: p, ...inst };
   }
   return null;
 }
@@ -118,10 +128,8 @@ async function spawnInstanceForProject(projectDirectory) {
   if (existing && existing.status === "ready") {
     const health = await probeHealth(existing.baseUrl, 2000);
     if (health.ok) {
-      console.log(`[spawn] Found healthy existing instance: ${existing.baseUrl}`);
       return existing;
     }
-    console.log(`[spawn] Instance in state but unhealthy: ${existing.baseUrl} — ${health.reason}`);
   }
   const port = await allocatePort(state);
   const baseUrl = `http://127.0.0.1:${port}`;
@@ -256,20 +264,12 @@ export async function projectStartCommand(projectPath) {
 
   const state = readState();
   const existing = findInstanceForPath(state, projectPath);
-  console.log(`[project start] state has ${Object.keys(state.instances ?? {}).length} instance(s)`);
-  if (existing) {
-    console.log(`[project start] found instance in state: ${JSON.stringify({ baseUrl: existing.baseUrl, status: existing.status, pid: existing.pid })}`);
-  } else {
-    console.log(`[project start] no instance found in state for: ${projectPath}`);
-  }
   if (existing && existing.status === "ready") {
     const health = await probeHealth(existing.baseUrl, 2000);
-    console.log(`[project start] health probe: ${JSON.stringify(health)}`);
     if (health.ok) {
       console.log(`Already running: ${existing.baseUrl}`);
       return;
     }
-    console.log(`[project start] instance in state but unhealthy — will spawn new`);
   }
 
   try {
