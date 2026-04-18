@@ -193,8 +193,9 @@ export async function listModes(baseUrl) {
       return true;
     })
     .map((agent) => ({
-      // Normalize and strip all invisible Unicode to get clean ASCII name
-      name: agent.name.normalize("NFKD").replace(/[\p{Cc}\p{Cf}\p{Co}\p{Cn}]/gu, "").replace(/\s+/g, " ").trim(),
+      // Use name exactly as returned — do not strip ZWSP or other invisible chars
+      // OpenCode matches against its internal registry which contains the raw names
+      name: agent.name,
       description: typeof agent.description === "string" ? agent.description.trim() : "",
     }));
 
