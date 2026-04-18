@@ -128,14 +128,30 @@ async function spawnInstanceForProject(projectDirectory) {
   if (existing && existing.status === "ready") {
     const portInUse = await isPortInUse(existing.port);
     if (portInUse) {
-      // Port is in use — wait for the HTTP server to actually respond
-      console.log(`[spawn] Port ${existing.port} in use — waiting for server to be healthy...`);
-      const health = await probeHealth(existing.baseUrl, 30_000);
-      if (health.ok) {
-        console.log(`[spawn] Server healthy at ${existing.baseUrl}`);
-        return { baseUrl: existing.baseUrl, port: existing.port, pid: existing.pid };
+      // Port is bound — check PID and health
+      let pidAlive = false;
+      if (typeof existing.pid === "number") {
+        try { process.kill(existing.pid, 0); pidAlive = true; } catch { pidAlive = false; }
       }
-      console.log(`[spawn] Server unhealthy after wait: ${health.reason} — will respawn`);
+      if (pidAlive) {
+        // PID alive, port in use — wait for HTTP server to respond
+        console.log(`[spawn] PID ${existing.pid} alive, port ${existing.port} in use — waiting for server...`);
+        const health = await probeHealth(existing.baseUrl, 30_000);
+        if (health.ok) {
+          console.log(`[spawn] Server healthy at ${existing.baseUrl}`);
+          return { baseUrl: existing.baseUrl, port: existing.port, pid: existing.pid };
+        }
+        console.log(`[spawn] Server unhealthy after wait: ${health.reason} — PID alive but server not responding, killing it`);
+        try { process.kill(existing.pid, "SIGTERM"); } catch {}
+        await new Promise((r) => setTimeout(r, 1000));
+        try { process.kill(existing.pid, "SIGKILL"); } catch {}
+      } else {
+        console.log(`[spawn] PID ${existing.pid} is dead — cleaning up stale entry`);
+      }
+      // Clean up stale state entry and proceed to respawn
+      const state = readState();
+      delete state.instances[projectDirectory];
+      saveState(state);
     }
   }
   const port = await allocatePort(state);
