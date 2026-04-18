@@ -51,6 +51,8 @@ Base URL: `https://cli.petartopic.com`
 | GET | `/projects` | — | Project roots |
 | GET | `/sessions/:project` | — | List sessions for a project |
 | POST | `/sessions/:project/new` | `{ title? }` | Create new session |
+| GET | `/modes/:project` | — | List available agent modes |
+| POST | `/modes/:project/mode` | `{ mode, sessionId? }` | Set agent mode |
 | POST | `/send` | `{ project, prompt, sessionId? }` | Send a prompt |
 | GET | `/watch/:project` | — | SSE stream of session messages |
 | POST | `/stop` | `{ project, sessionId? }` | Abort current execution |

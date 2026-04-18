@@ -267,6 +267,35 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // ── GET /modes/:project ──────────────────────────────────────────────
+    if (pathname.startsWith("/modes/") && method === "GET") {
+      const projectPath = decodeURIComponent(pathname.slice("/modes/".length));
+      const state = readState();
+      const instance = findInstanceForPath(state, projectPath);
+      if (!instance || instance.status !== "ready") {
+        return errorResponse(res, 404, "No running instance for this project");
+      }
+      const modes = await listModes(instance.baseUrl);
+      return jsonResponse(res, 200, { projectPath, baseUrl: instance.baseUrl, modes });
+    }
+
+    // ── POST /modes/:project ──────────────────────────────────────────────
+    if (pathname.startsWith("/modes/") && pathname.endsWith("/mode") && method === "POST") {
+      const projectPath = decodeURIComponent(pathname.slice("/modes/".length, -5)); // strip "/mode"
+      const body = await parseBody(req);
+      const state = readState();
+      const instance = findInstanceForPath(state, projectPath);
+      if (!instance || instance.status !== "ready") {
+        return errorResponse(res, 404, "No running instance for this project");
+      }
+      const sessionId = body.sessionId ?? state?.activeSession?.[projectPath];
+      if (!sessionId) {
+        return errorResponse(res, 400, "No active session");
+      }
+      await setMode(instance.baseUrl, sessionId, body.mode);
+      return jsonResponse(res, 200, { ok: true, mode: body.mode, sessionId });
+    }
+
     // ── POST /stop ────────────────────────────────────────────────────────
     if (pathname === "/stop" && method === "POST") {
       const body = await parseBody(req);

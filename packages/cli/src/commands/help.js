@@ -35,8 +35,8 @@ COMMANDS
     stop [--project <path>]            Abort current execution
 
   Agent mode
-    mode <name> [--project <path>]    Set agent mode
-    mode list [--project <path>]      List available modes
+    mode list [--project <path>]       List available modes
+    mode <name> [--project <path>]   Set agent mode
 
   Lifecycle
     status              Show all running instances and their health
