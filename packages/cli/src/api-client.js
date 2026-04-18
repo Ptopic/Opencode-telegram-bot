@@ -103,7 +103,7 @@ export async function listModes(baseUrl) {
       return true;
     })
     .map((agent) => ({
-      name: agent.name.trim(),
+      name: agent.name.replace(/^[\u200B\u200C\u200D\uFEFF\u00A0\s]+/, "").replace(/[\u200B\u200C\u200D\uFEFF\u00A0\s]+$/, ""),
       description: typeof agent.description === "string" ? agent.description.trim() : "",
     }));
 
