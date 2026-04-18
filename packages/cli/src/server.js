@@ -361,6 +361,22 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // ── TEMP DEBUG send raw ────────────────────────────────────────────────
+    if (pathname === "/debug/send" && method === "POST") {
+      const body = await parseBody(req);
+      const { project: projectPath, sessionId, prompt, agent } = body;
+      if (!projectPath || !sessionId || !prompt) return errorResponse(res, 400, "Missing required fields");
+
+      const state = readState();
+      const instance = findInstanceForPath(state, projectPath);
+      if (!instance) return errorResponse(res, 404, "Instance not found");
+
+      // Call sendPrompt directly to see raw response
+      const { sendPrompt } = await import("./api-client.js");
+      const reply = await sendPrompt(instance.baseUrl, sessionId, prompt, agent ?? null);
+      return jsonResponse(res, 200, { reply, agent });
+    }
+
     // ── GET /modes/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/modes/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length));
