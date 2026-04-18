@@ -30,6 +30,14 @@ function readState() {
   }
 }
 
+function saveState(state) {
+  try {
+    writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  } catch (err) {
+    console.warn("Failed to save state:", err.message);
+  }
+}
+
 function findInstanceForPath(state, projectPath) {
   if (!projectPath) return null;
   const normalized = projectPath.replace(/\/+$/, "").toLowerCase();
@@ -184,6 +192,7 @@ async function handleRequest(req, res) {
         ...(typeof existing === "object" && existing !== null ? existing : {}),
         sessionId: session.id,
       };
+      saveState(state);
 
       return jsonResponse(res, 201, { session, activeSessionId: session.id });
     }
@@ -406,6 +415,7 @@ async function handleRequest(req, res) {
         ...(typeof existing === "object" && existing !== null ? existing : {}),
         mode: body.mode,
       };
+      saveState(state);
 
       return jsonResponse(res, 200, { ok: true, mode: body.mode, sessionId });
     }
