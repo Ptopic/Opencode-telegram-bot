@@ -820,7 +820,8 @@ if (command === "start") {
 // ── serve: HTTP API server for cloudflared tunneling ───────────────────────
 if (command === "serve") {
     const port = parseInt(args.find((a) => a.startsWith("--port="))?.split("=")[1] ?? "4097", 10);
-    startServer(port);
+    const watch = args.includes("--watch");
+    startServer(port, { watch });
     // Keep the process alive — prevent Node from exiting when stdin closes
     process.stdin.resume();
     await new Promise(() => {});
