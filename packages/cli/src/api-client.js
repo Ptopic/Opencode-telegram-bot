@@ -62,6 +62,59 @@ export async function deleteSession(baseUrl, sessionId) {
 }
 
 /**
+ * Poll session status until idle, then fetch messages for reply.
+ * Mirrors bot's waitForSessionIdle + fetchLatestSessionReply flow.
+ */
+async function pollSessionUntilIdle(baseUrl, sessionId, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 500));
+
+    try {
+      // Check session status (mirrors bot's waitForSessionIdle)
+      const sessionRes = await createClient(baseUrl).get(`/session/${sessionId}`);
+      const status = sessionRes?.data?.status ?? sessionRes?.data?.state ?? "";
+
+      if (status !== "idle" && status !== "idel") continue;
+
+      // Session is idle — fetch messages and extract reply
+      const msgRes = await createClient(baseUrl).get(
+        `/session/${sessionId}/message`,
+        { params: { limit: 500 }, timeout: 8000 }
+      );
+
+      const payload = msgRes?.data;
+      const messages = Array.isArray(payload)
+        ? payload
+        : Array.isArray(payload?.messages)
+        ? payload.messages
+        : [];
+
+      if (!messages.length) return "";
+
+      // Last message is the assistant reply
+      const last = messages[messages.length - 1];
+      const text = last?.text ?? last?.content ?? "";
+      if (typeof text === "string" && text.trim()) return text.trim();
+
+      const parts = last?.parts ?? last?.content?.parts ?? [];
+      for (const part of parts) {
+        if (part?.type === "text" && part?.text?.trim()) {
+          return part.text.trim();
+        }
+      }
+
+      return "";
+    } catch {
+      // Keep polling
+    }
+  }
+
+  return "";
+}
+
+/**
  * SSE event collector — mirrors the Telegram bot's SSE parsing exactly.
  * Returns the first assistant message text from the event stream.
  */
@@ -176,8 +229,8 @@ export async function sendPrompt(baseUrl, sessionId, text, agent) {
   const direct = extractReply(res.data);
   if (direct) return direct;
 
-  // Direct reply empty — use SSE event stream to get the reply
-  return collectSSEvents(baseUrl, sessionId, 30000);
+  // Direct reply empty — poll session status until idle, then fetch messages
+  return pollSessionUntilIdle(baseUrl, sessionId, 30000);
 }
 
 /**
