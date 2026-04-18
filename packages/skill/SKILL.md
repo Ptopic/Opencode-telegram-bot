@@ -80,10 +80,11 @@ opencode-telegram start bot # Same as 'bot'
 opencode-telegram start all # Same as default
 ```
 
-## Project Roots
+## Project Paths
 
-- **Personal**: `/Users/petartopic/Desktop/Petar`
-- **Work**: `/Users/petartopic/Desktop/Profico`
+- **Personal projects**: `/Users/petartopic/Desktop/Petar`
+- **Work projects**: `/Users/petartopic/Desktop/Profico`
+- **Employee-tracker**: `/Users/petartopic/Desktop/Petar/Employee-tracker`
 
 Each project gets its own OpenCode server instance (ports 50000–59999).
 
@@ -113,20 +114,21 @@ opencode-telegram session switch <project-path> <session-id>
 
 ### Agent mode selection
 ```bash
-opencode-telegram mode list --project <project-path>   # List available agents
-opencode-telegram mode <index-or-name> --project <project-path>  # Set active agent
+opencode-telegram mode list --project <project-path>   # List available agents with indices
+opencode-telegram mode <index> --project <project-path>  # Set by index (preferred)
 ```
 
 Examples:
 ```bash
 opencode-telegram mode list --project /Users/petartopic/Desktop/Petar/my-project
-opencode-telegram mode 0 --project /Users/petartopic/Desktop/Petar/my-project  # By index
-opencode-telegram mode Sisyphus --project /Users/petartopic/Desktop/Petar/my-project  # By name
+opencode-telegram mode 0 --project /Users/petartopic/Desktop/Petar/my-project  # By index (preferred)
 ```
 
+**Use index numbers (0, 1, 2, 3...) instead of agent names** — it's more practical and reliable.
+
 **Available agents** (fetched from OpenCode `/agent` endpoint, filtered to non-subagent):
-- `build` — Default coding agent
-- `plan` — Planning mode
+- `0` — build — Default coding agent
+- `1` — plan — Planning mode
 - Others depend on OpenCode configuration
 
 **Important:** Mode is stored per-project in state file (`~/.opencode-telegram-instances.json`) alongside sessionId. When you switch or create a session, the mode is preserved — no need to re-set it.
@@ -135,6 +137,42 @@ opencode-telegram mode Sisyphus --project /Users/petartopic/Desktop/Petar/my-pro
 ```bash
 opencode-telegram send "fix the login bug" --project <project-path>
 ```
+
+## Typical Workflow
+
+When Petar asks me to work on a project, I should:
+
+1. **Check if project instance is running:**
+   ```bash
+   opencode-telegram status
+   ```
+
+2. **Start project if needed:**
+   ```bash
+   opencode-telegram project start /Users/petartopic/Desktop/Petar/Employee-tracker
+   ```
+
+3. **Create a new session (recommended for new tasks):**
+   ```bash
+   opencode-telegram session new /Users/petartopic/Desktop/Petar/Employee-tracker
+   ```
+
+4. **List available modes and set by index:**
+   ```bash
+   opencode-telegram mode list --project /Users/petartopic/Desktop/Petar/Employee-tracker
+   opencode-telegram mode 0 --project /Users/petartopic/Desktop/Petar/Employee-tracker
+   ```
+   Use index (0, 1, 2...) not agent names.
+
+5. **Send prompts:**
+   ```bash
+   opencode-telegram send "implement the login feature" --project /Users/petartopic/Desktop/Petar/Employee-tracker
+   ```
+
+6. **To stop execution:**
+   ```bash
+   opencode-telegram stop --project /Users/petartopic/Desktop/Petar/Employee-tracker
+   ```
 
 ### Stop execution
 ```bash
