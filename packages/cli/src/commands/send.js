@@ -1,6 +1,7 @@
 /**
  * send <prompt> [--project <path>]
  * Sends a prompt to the active session of a project and prints the reply.
+ * Automatically uses the mode set via `opencode-telegram mode <index>`.
  */
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -62,9 +63,9 @@ export async function sendPromptCommand(prompt, projectPath) {
     process.exit(1);
   }
 
-  const sessionId = state?.activeSession?.[projectPath];
+  const sessionData = state?.activeSession?.[projectPath];
+  let targetSessionId = sessionData?.sessionId;
 
-  let targetSessionId = sessionId;
   if (!targetSessionId) {
     // Pick the most recent session
     const sessions = await listSessions(instance.baseUrl);
@@ -75,10 +76,13 @@ export async function sendPromptCommand(prompt, projectPath) {
     targetSessionId = sessions[sessions.length - 1].id;
   }
 
-  console.error(`Sending to session ${targetSessionId} on ${instance.baseUrl}...`);
+  // Auto-use the mode saved via `opencode-telegram mode <index>`
+  const agent = sessionData?.mode ?? null;
+
+  console.error(`Sending to session ${targetSessionId} on ${instance.baseUrl}${agent ? ` (mode: ${agent})` : ""}...`);
 
   try {
-    const reply = await sendPrompt(instance.baseUrl, targetSessionId, prompt);
+    const reply = await sendPrompt(instance.baseUrl, targetSessionId, prompt, agent);
     if (reply) {
       console.log(reply);
     } else {

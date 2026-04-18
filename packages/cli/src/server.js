@@ -198,7 +198,8 @@ async function handleRequest(req, res) {
         return errorResponse(res, 404, "No running instance for this project");
       }
 
-      let targetSessionId = sessionId ?? state?.activeSession?.[projectPath];
+      const sessionData = state?.activeSession?.[projectPath] ?? {};
+      let targetSessionId = sessionId ?? sessionData.sessionId;
 
       if (!targetSessionId) {
         const sessions = await listSessions(instance.baseUrl);
@@ -206,11 +207,15 @@ async function handleRequest(req, res) {
         targetSessionId = sessions[sessions.length - 1].id;
       }
 
-      const reply = await sendPrompt(instance.baseUrl, targetSessionId, prompt, agent);
+      // Auto-use saved mode unless caller explicitly passed one
+      const effectiveAgent = agent ?? sessionData.mode ?? null;
+
+      const reply = await sendPrompt(instance.baseUrl, targetSessionId, prompt, effectiveAgent);
 
       return jsonResponse(res, 200, {
         projectPath,
         sessionId: targetSessionId,
+        agent: effectiveAgent,
         reply: reply ?? "(no reply)",
       });
     }
@@ -225,9 +230,10 @@ async function handleRequest(req, res) {
         return errorResponse(res, 404, "No running instance for this project");
       }
 
+      const sessionData = state?.activeSession?.[projectPath] ?? {};
       const sessionId =
         url.searchParams.get("session") ??
-        state?.activeSession?.[projectPath] ??
+        sessionData.sessionId ??
         (await listSessions(instance.baseUrl)).pop()?.id;
 
       if (!sessionId) {

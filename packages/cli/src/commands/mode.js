@@ -1,8 +1,9 @@
 /**
- * mode <name> [--project <path>]
+ * mode <index_or_name> [--project <path>]
  * Sets the agent mode for the active session.
+ * Use `mode list` to see available modes with their indices.
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
 import { listModes, setMode, listSessions } from "../api-client.js";
@@ -18,6 +19,14 @@ function readState() {
   }
 }
 
+function saveState(state) {
+  try {
+    writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+  } catch (err) {
+    console.warn("Failed to save state:", err.message);
+  }
+}
+
 function findInstanceForPath(state, projectPath) {
   const normalized = projectPath.replace(/\/+$/, "").toLowerCase();
   for (const [p, inst] of Object.entries(state.instances ?? {})) {
@@ -28,7 +37,7 @@ function findInstanceForPath(state, projectPath) {
 }
 
 /**
- * List available modes.
+ * List available modes with their indices.
  */
 export async function listModesCommand(projectPath) {
   if (!projectPath) {
@@ -61,27 +70,31 @@ export async function listModesCommand(projectPath) {
     return;
   }
 
+  const currentMode = state?.activeSession?.[projectPath]?.mode;
+
   console.log(`Available modes for ${projectPath}:`);
-  for (const m of modes) {
+  modes.forEach((m, i) => {
     const name = typeof m === "string" ? m : m.name;
     const desc = typeof m === "object" && m.description ? ` — ${m.description}` : "";
-    console.log(`  • ${name}${desc}`);
-  }
+    const marker = name === currentMode ? " ✅" : "";
+    console.log(`  ${i}  ${name}${desc}${marker}`);
+  });
+  console.log("\nSwitch with: opencode-telegram mode <index> [--project <path>]");
 }
 
 /**
- * Set the active mode.
- * @param {string} modeName
+ * Set the active mode by index number or name.
+ * @param {string} modeArg - numeric index or agent name
  * @param {string} [projectPath]
  */
-export async function setModeCommand(modeName, projectPath) {
-  if (!modeName) {
-    console.error("Usage: opencode-telegram mode <name> [--project <path>]");
+export async function setModeCommand(modeArg, projectPath) {
+  if (!modeArg) {
+    console.error("Usage: opencode-telegram mode <index_or_name> [--project <path>]");
     console.error("       opencode-telegram mode list [--project <path>]");
     process.exit(1);
   }
 
-  if (modeName === "list") {
+  if (modeArg === "list") {
     return listModesCommand(projectPath);
   }
 
@@ -108,18 +121,34 @@ export async function setModeCommand(modeName, projectPath) {
     process.exit(1);
   }
 
-  const sessionId = state?.activeSession?.[projectPath];
-  if (!sessionId) {
-    // Try to use the latest session
-    const sessions = await listSessions(instance.baseUrl);
-    if (!sessions.length) {
-      console.error("No sessions found. Create one first.");
-      process.exit(1);
-    }
-    // Use the most recent session
-    sessionId = sessions[sessions.length - 1].id;
+  // Resolve mode: if numeric index, look it up; otherwise use as agent name
+  const modes = await listModes(instance.baseUrl);
+  if (!modes.length) {
+    console.error("No modes available from OpenCode.");
+    process.exit(1);
   }
 
-  await setMode(instance.baseUrl, sessionId, modeName);
-  console.log(`Mode set to: ${modeName}`);
+  let resolvedName = modeArg;
+  const numericIndex = Number(modeArg);
+  if (!isNaN(numericIndex) && Number.isInteger(numericIndex)) {
+    if (numericIndex < 0 || numericIndex >= modes.length) {
+      console.error(`Invalid mode index: ${modeArg}. Available range: 0-${modes.length - 1}`);
+      process.exit(1);
+    }
+    resolvedName = modes[numericIndex].name;
+  }
+
+  // Persist the selected mode for this project in state
+  if (!state.activeSession) state.activeSession = {};
+  if (!state.activeSession[projectPath]) state.activeSession[projectPath] = {};
+  state.activeSession[projectPath].mode = resolvedName;
+  saveState(state);
+
+  // Also update the active session if one exists
+  const sessionId = state.activeSession?.[projectPath]?.sessionId;
+  if (sessionId) {
+    await setMode(instance.baseUrl, sessionId, resolvedName);
+  }
+
+  console.log(`Mode set to: ${resolvedName}`);
 }
