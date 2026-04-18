@@ -94,6 +94,13 @@ Run `opencode-telegram help` for the full list. Key commands:
 opencode-telegram projects list
 ```
 
+### Start/stop project instances
+```bash
+opencode-telegram project start /Users/petartopic/Desktop/Petar/my-project
+opencode-telegram project stop /Users/petartopic/Desktop/Petar/my-project
+opencode-telegram project list
+```
+
 ### Manage sessions
 ```bash
 opencode-telegram session list <project-path>

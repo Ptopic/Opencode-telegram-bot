@@ -19,6 +19,7 @@ import { statusCommand } from "./commands/status.js";
 import { logsCommand } from "./commands/logs.js";
 import { watchCommand } from "./commands/watch.js";
 import { startServer } from "./server.js";
+import { projectStartCommand, projectStopCommand, projectListCommand } from "./commands/project.js";
 import { helpCommand } from "./commands/help.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -668,6 +669,23 @@ if (command === "projects") {
     } else {
         console.error(`Unknown 'projects' subcommand: ${sub}`);
         console.error("Usage: opencode-telegram projects list");
+        process.exit(1);
+    }
+    process.exit(0);
+}
+
+if (command === "project") {
+    const sub = args[0];
+    const subArgs = args.slice(1);
+
+    if (sub === "start") {
+        await projectStartCommand(subArgs[0]);
+    } else if (sub === "stop") {
+        await projectStopCommand(subArgs[0]);
+    } else if (sub === "list") {
+        await projectListCommand();
+    } else {
+        console.error("Usage: opencode-telegram project start|stop|list <project-path>");
         process.exit(1);
     }
     process.exit(0);
