@@ -63,12 +63,12 @@ export async function deleteSession(baseUrl, sessionId) {
 
 /**
  * Send a prompt to a session and return the reply text.
- * Uses POST /session/{id}/message { parts: [{ type: "text", text }] }
+ * Uses POST /session/{id}/message { parts: [{ type: "text", text }], agent? }
  */
-export async function sendPrompt(baseUrl, sessionId, text) {
-  const res = await createClient(baseUrl).post(`/session/${sessionId}/message`, {
-    parts: [{ type: "text", text }],
-  });
+export async function sendPrompt(baseUrl, sessionId, text, agent) {
+  const payload = { parts: [{ type: "text", text }] };
+  if (agent) payload.agent = agent;
+  const res = await createClient(baseUrl).post(`/session/${sessionId}/message`, payload);
   return extractReply(res.data);
 }
 

@@ -187,7 +187,7 @@ async function handleRequest(req, res) {
     // ── POST /send ─────────────────────────────────────────────────────────
     if (pathname === "/send" && method === "POST") {
       const body = await parseBody(req);
-      const { project: projectPath, sessionId, prompt } = body;
+      const { project: projectPath, sessionId, prompt, agent } = body;
 
       if (!prompt) return errorResponse(res, 400, "Missing 'prompt' in request body");
 
@@ -206,7 +206,7 @@ async function handleRequest(req, res) {
         targetSessionId = sessions[sessions.length - 1].id;
       }
 
-      const reply = await sendPrompt(instance.baseUrl, targetSessionId, prompt);
+      const reply = await sendPrompt(instance.baseUrl, targetSessionId, prompt, agent);
 
       return jsonResponse(res, 200, {
         projectPath,
