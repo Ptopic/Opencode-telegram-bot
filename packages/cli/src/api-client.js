@@ -9,7 +9,8 @@ import axios from "axios";
  * Mirrors the Telegram bot's SSE parsing logic exactly.
  */
 async function collectSSEvents(baseUrl, sessionId, timeoutMs = 30000) {
-  const url = `${baseUrl}/session/${sessionId}/event`;
+  // Use /global/event like the Telegram bot — it multiplexes all session events
+  const url = `${baseUrl}/global/event`;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -51,6 +52,10 @@ async function collectSSEvents(baseUrl, sessionId, timeoutMs = 30000) {
 
         // Look for assistant messages with text parts — mirrors bot's isAssistantLikeMessage
         const messages = payload?.messages ?? payload?.data?.messages ?? [];
+        // Filter to events for our session only
+        const eventSessionId = payload?.sessionId ?? event?.sessionId ?? "";
+        if (eventSessionId && eventSessionId !== sessionId) continue;
+
         for (const msg of messages) {
           const role = msg?.role ?? msg?.type ?? "";
           if (typeof role === "string" && role.toLowerCase() !== "assistant") continue;
