@@ -14,6 +14,7 @@ import {
   sendPrompt,
   abortSession,
   listModes,
+  setMode,
   getSessionMessages,
 } from "./api-client.js";
 import { getProjectRoots } from "./config.js";
