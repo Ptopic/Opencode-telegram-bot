@@ -1,6 +1,6 @@
 ---
 name: opencode-cli
-description: Use when Petar wants to control OpenCode on his Mac via the opencode-telegram CLI. Covers starting the bot, switching projects, sending prompts, managing sessions, and stopping executions. Triggers on mentions of OpenCode, coding sessions, projects on his Mac, or CLI commands for OpenCode.
+description: Use when Petar wants to control OpenCode on his Mac via the opencode-telegram CLI or HTTP API. Covers starting the bot, switching projects, sending prompts, managing sessions, modes, and stopping executions. Triggers on mentions of OpenCode, coding sessions, projects on his Mac, or CLI commands for OpenCode.
 ---
 
 # OpenCode CLI Skill
@@ -27,7 +27,7 @@ When the HTTP server is running and tunneled via cloudflared, I can call it dire
 ### Start the HTTP API server on your Mac
 
 ```bash
-opencode-telegram serve [--port 4097]
+opencode-telegram serve --port 4097
 ```
 
 ### Tunnel with cloudflared
@@ -38,11 +38,91 @@ cloudflared tunnel --url http://localhost:4097 --hostname cli.petartopic.com
 
 Keep both running (e.g. in a `screen` or `tmux` session).
 
-### API Endpoints
+### API Base URL
 
-Base URL: `https://cli.petartopic.com`
+**Important:** Use `https://cli.petartopic.com` as the base URL for all API calls.
 
-**Important:** I must use `https://cli.petartopic.com` as the base URL for all API calls. This is the cloudflared tunnel to Petar's Mac. Always prepend this to API paths.
+## Complete OpenClaw Agent Workflow
+
+When Petar asks me to work on a project, I should use the HTTP API:
+
+### Step 1: Ensure project is running
+
+```bash
+curl https://cli.petartopic.com/health
+```
+
+If no instance for the project, start it:
+
+```bash
+curl -X POST https://cli.petartopic.com/project/start \
+  -H "Content-Type: application/json" \
+  -d '{"project": "/Users/petartopic/Desktop/Petar/Employee-tracker"}'
+```
+
+### Step 2: Get available agents
+
+```bash
+curl "https://cli.petartopic.com/modes/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Project/path'))")"
+```
+
+The response includes agent names with their index. **Agent names have leading unicode zero-width spaces — use the EXACT name returned, including those characters.**
+
+Example response:
+```json
+{
+  "modes": [
+    {"name": "\u200b\u200b\u200b\u200bAtlas - Plan Executor", "description": "..."},
+    {"name": "\u200b\u200bHephaestus - Deep Agent", "description": "..."},
+    {"name": "\u200b\u200b\u200bPrometheus - Plan Builder", "description": "..."},
+    {"name": "\u200bSisyphus - Ultraworker", "description": "..."}
+  ]
+}
+```
+
+### Step 3: Create a new session
+
+```bash
+curl -X POST "https://cli.petartopic.com/sessions/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Project/path'))")/new" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "my-task"}'
+```
+
+Returns the new `sessionId`. Use this sessionId for all subsequent calls.
+
+### Step 4: Set the agent mode
+
+```bash
+curl -X POST "https://cli.petartopic.com/modes/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Project/path'))")/mode" \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "\u200b\u200b\u200b\u200bAtlas - Plan Executor", "sessionId": "ses_xxx"}'
+```
+
+**Critical:** Use the EXACT agent name from Step 2 (with unicode chars). The backend expects the raw name.
+
+### Step 5: Send prompts
+
+```bash
+curl -X POST https://cli.petartopic.com/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project": "/Users/petartopic/Desktop/Project/path",
+    "sessionId": "ses_xxx",
+    "prompt": "Your task description here"
+  }'
+```
+
+If `sessionId` is omitted, uses the active session for that project.
+
+### Step 6: Stop execution if needed
+
+```bash
+curl -X POST https://cli.petartopic.com/stop \
+  -H "Content-Type: application/json" \
+  -d '{"project": "/Users/petartopic/Desktop/Project/path", "sessionId": "ses_xxx"}'
+```
+
+## API Endpoints Reference
 
 | Method | Path | Body | Description |
 |--------|------|------|-------------|
@@ -50,57 +130,45 @@ Base URL: `https://cli.petartopic.com`
 | GET | `/status` | — | Detailed status of all instances |
 | GET | `/projects` | — | Project roots |
 | GET | `/sessions/:project` | — | List sessions for a project |
-| POST | `/sessions/:project/new` | `{ title? }` | Create new session |
-| GET | `/modes/:project` | — | List available agent modes |
+| POST | `/sessions/:project/new` | `{ title? }` | Create new session, returns `session.id` |
+| GET | `/modes/:project` | — | List available agents (with unicode chars) |
 | POST | `/modes/:project/mode` | `{ mode, sessionId? }` | Set agent mode |
 | POST | `/send` | `{ project, prompt, sessionId? }` | Send a prompt |
 | GET | `/watch/:project` | — | SSE stream of session messages |
 | POST | `/stop` | `{ project, sessionId? }` | Abort current execution |
+| POST | `/project/start` | `{ project }` | Start a project instance |
+| POST | `/project/stop` | `{ project }` | Stop a project instance |
 
-**Example — send a prompt:**
+### URL Encoding
+
+For paths with project paths, URL-encode the path:
 ```bash
-curl -X POST https://cli.petartopic.com/send \
-  -H "Content-Type: application/json" \
-  -d '{"project": "/Users/petartopic/Desktop/Petar/my-project", "prompt": "Hello"}'
+python3 -c "import urllib.parse; print(urllib.parse.quote('/path/to/project'))"
 ```
 
-**Example — watch a session via SSE:**
-```
-GET https://cli.petartopic.com/watch/<encoded-project-path>?session=<session-id>&interval=2000
-```
+Example: `/Users/petartopic/Desktop/Project` → `%2FUsers%2Fpetartopic%2FDesktop%2FProject`
 
-## Start Modes
+## Available Agents
 
-```bash
-opencode-telegram           # bot + CLI together (default)
-opencode-telegram bot       # Telegram bot only
-opencode-telegram cli       # Interactive CLI REPL only
-opencode-telegram serve     # HTTP API server for cloudflared tunnel
-opencode-telegram start bot # Same as 'bot'
-opencode-telegram start all # Same as default
-```
+The 4 main agents (fetched from OpenCode `/agent` endpoint):
 
-## Project Paths
+| Index | Name | Description |
+|-------|------|-------------|
+| 0 | Atlas - Plan Executor | Orchestrates work via task() to complete ALL tasks in a todo list |
+| 1 | Hephaestus - Deep Agent | Autonomous Deep Worker - goal-oriented execution |
+| 2 | Prometheus - Plan Builder | Plan agent |
+| 3 | Sisyphus - Ultraworker | Powerful AI orchestrator with strategic delegation |
 
-- **Personal projects**: `/Users/petartopic/Desktop/Petar`
-- **Work projects**: `/Users/petartopic/Desktop/Profico`
+**Use the EXACT name including unicode chars when setting mode.**
 
-Each project gets its own OpenCode server instance (ports 50000–59999).
+## CLI Commands (Local)
 
-## CLI Commands
-
-Run `opencode-telegram help` for the full list. Key commands:
-
-### List projects
-```bash
-opencode-telegram projects list
-```
+When running commands directly on Petar's Mac:
 
 ### Start/stop project instances
 ```bash
-opencode-telegram project start /Users/petartopic/Desktop/Petar/my-project
-opencode-telegram project start              # uses current directory
-opencode-telegram project stop /Users/petartopic/Desktop/Petar/my-project
+opencode-telegram project start <project-path>
+opencode-telegram project stop <project-path>
 opencode-telegram project list
 ```
 
@@ -113,65 +181,14 @@ opencode-telegram session switch <project-path> <session-id>
 
 ### Agent mode selection
 ```bash
-opencode-telegram mode list --project <project-path>   # List available agents with indices
-opencode-telegram mode <index> --project <project-path>  # Set by index (preferred)
+opencode-telegram mode list --project <project-path>
+opencode-telegram mode <index> --project <project-path>
 ```
-
-Examples:
-```bash
-opencode-telegram mode list --project /Users/petartopic/Desktop/Petar/my-project
-opencode-telegram mode 0 --project /Users/petartopic/Desktop/Petar/my-project  # By index (preferred)
-```
-
-**Use index numbers (0, 1, 2, 3...) instead of agent names** — it's more practical and reliable.
-
-**Available agents** (fetched from OpenCode `/agent` endpoint, filtered to non-subagent):
-- `0` — build — Default coding agent
-- `1` — plan — Planning mode
-- Others depend on OpenCode configuration
-
-**Important:** Mode is stored per-project in state file (`~/.opencode-telegram-instances.json`) alongside sessionId. When you switch or create a session, the mode is preserved — no need to re-set it.
 
 ### Send a prompt
 ```bash
 opencode-telegram send "fix the login bug" --project <project-path>
 ```
-
-## Typical Workflow
-
-When Petar asks me to work on a project, I should:
-
-1. **Check if project instance is running:**
-   ```bash
-   opencode-telegram status
-   ```
-
-2. **Start project if needed:**
-   ```bash
-   opencode-telegram project start <project-path>
-   ```
-
-3. **Create a new session (recommended for new tasks):**
-   ```bash
-   opencode-telegram session new <project-path>
-   ```
-
-4. **List available modes and set by index:**
-   ```bash
-   opencode-telegram mode list --project <project-path>
-   opencode-telegram mode 0 --project <project-path>
-   ```
-   Use index (0, 1, 2...) not agent names.
-
-5. **Send prompts:**
-   ```bash
-   opencode-telegram send "implement the login feature" --project <project-path>
-   ```
-
-6. **To stop execution:**
-   ```bash
-   opencode-telegram stop --project <project-path>
-   ```
 
 ### Stop execution
 ```bash
@@ -180,19 +197,25 @@ opencode-telegram stop --project <project-path>
 
 ### Watch session activity
 ```bash
-opencode-telegram watch <project-path>              # poll every 2s
-opencode-telegram watch <project-path> --interval=1000
+opencode-telegram watch <project-path>
 ```
-
-This streams new messages as they arrive — useful for real-time monitoring.
 
 ### Status & logs
 ```bash
-opencode-telegram status              # Show all running instances
-opencode-telegram logs <project-path> # Tail logs for a project
+opencode-telegram status
+opencode-telegram logs <project-path>
 ```
 
 ### Kill all instances
 ```bash
 opencode-telegram kill-all
 ```
+
+## State Management
+
+State is stored in SQLite database at `~/.opencode-telegram.db`:
+- `instances` table: running OpenCode server processes
+- `active_sessions` table: active session + mode per project
+- `projects` table: project root configurations
+
+This means state persists across server restarts and is shared between CLI and API.
