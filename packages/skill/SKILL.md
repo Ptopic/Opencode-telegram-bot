@@ -90,15 +90,15 @@ curl -X POST "https://cli.petartopic.com/sessions/$(python3 -c "import urllib.pa
 
 Returns the new `sessionId`. Use this sessionId for all subsequent calls.
 
-### Step 4: Set the agent mode
+### Step 4: Set the agent mode (use index!)
 
 ```bash
 curl -X POST "https://cli.petartopic.com/modes/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Project/path'))")/mode" \
   -H "Content-Type: application/json" \
-  -d '{"mode": "\u200b\u200b\u200b\u200bAtlas - Plan Executor", "sessionId": "ses_xxx"}'
+  -d '{"mode": "0", "sessionId": "ses_xxx"}'
 ```
 
-**Critical:** Use the EXACT agent name from Step 2 (with unicode chars). The backend expects the raw name.
+**Use index (0, 1, 2, 3) — the server resolves it to the correct agent name automatically.** No need to worry about unicode chars or exact names!
 
 ### Step 5: Send prompts
 
@@ -159,7 +159,7 @@ The 4 main agents (fetched from OpenCode `/agent` endpoint):
 | 2 | Prometheus - Plan Builder | Plan agent |
 | 3 | Sisyphus - Ultraworker | Powerful AI orchestrator with strategic delegation |
 
-**Use the EXACT name including unicode chars when setting mode.**
+**Use index (0, 1, 2, 3) when setting mode via API.** The server resolves it automatically.
 
 ## CLI Commands (Local)
 

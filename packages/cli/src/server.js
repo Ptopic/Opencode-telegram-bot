@@ -361,7 +361,7 @@ async function handleRequest(req, res) {
       return jsonResponse(res, 200, { projectPath, baseUrl: instance.base_url, modes });
     }
 
-    // ── POST /modes/:project ──────────────────────────────────────────────
+    // ── POST /modes/:project/mode ────────────────────────────────────────
     if (pathname.startsWith("/modes/") && pathname.endsWith("/mode") && method === "POST") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length, -5)); // strip "/mode"
       const body = await parseBody(req);
@@ -374,12 +374,22 @@ async function handleRequest(req, res) {
       if (!sessionId) {
         return errorResponse(res, 400, "No active session");
       }
-      await setMode(instance.base_url, sessionId, body.mode);
 
-      // Persist mode to database
-      await dbSetMode(projectPath, body.mode);
+      // Resolve mode: if body.mode is a number string (index), look up the name
+      let resolvedMode = body.mode;
+      const modeIndex = parseInt(body.mode, 10);
+      if (!isNaN(modeIndex) && modeIndex >= 0) {
+        const modes = await listModes(instance.base_url);
+        if (modeIndex >= modes.length) {
+          return errorResponse(res, 400, `Mode index ${modeIndex} out of range (0-${modes.length - 1})`);
+        }
+        resolvedMode = modes[modeIndex].name;
+      }
 
-      return jsonResponse(res, 200, { ok: true, mode: body.mode, sessionId });
+      await setMode(instance.base_url, sessionId, resolvedMode);
+      await dbSetMode(projectPath, resolvedMode);
+
+      return jsonResponse(res, 200, { ok: true, mode: resolvedMode, sessionId, index: modeIndex });
     }
 
     // ── POST /stop ────────────────────────────────────────────────────────
