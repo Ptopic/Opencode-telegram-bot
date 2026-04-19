@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
 import { createConnection } from "node:net";
 import { listProjects } from "./commands/projects.js";
 import {
@@ -21,6 +20,7 @@ import { watchCommand } from "./commands/watch.js";
 import { startServer } from "./server.js";
 import { projectStartCommand, projectStopCommand, projectListCommand } from "./commands/project.js";
 import { helpCommand } from "./commands/help.js";
+import { clearAllInstances, getInstance, listInstances, deleteInstance, upsertInstance } from "./db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,7 +28,6 @@ const __dirname = path.dirname(__filename);
 const repoRoot = path.resolve(__dirname, "../../..");
 const packageRoot = path.resolve(__dirname, "..");
 
-const INSTANCES_STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
 const INSTANCE_PORT_START = Number(process.env.OPENCODE_INSTANCE_PORT_START) || 50000;
 const INSTANCE_PORT_END = Number(process.env.OPENCODE_INSTANCE_PORT_END) || 59999;
 const INSTANCE_STARTUP_TIMEOUT_MS = 30000;
@@ -85,46 +84,9 @@ function defaultAttachSessionTitle(projectDirectory) {
     return `${path.basename(projectDirectory) || "project"}-local-${timestamp}`;
 }
 
-function readInstanceState() {
-    if (!existsSync(INSTANCES_STATE_FILE)) {
-        return { instances: {} };
-    }
-
-    try {
-        const content = readFileSync(INSTANCES_STATE_FILE, "utf8");
-        const data = JSON.parse(content);
-        return data;
-    } catch {
-        return { instances: {} };
-    }
-}
-
-function findInstanceForDirectory(state, directory) {
-    const normalizedDir = directory.replace(/\/+$/, "").toLowerCase();
-
-    for (const [projectPath, instance] of Object.entries(state.instances || {})) {
-        const normalizedProject = projectPath.replace(/\/+$/, "").toLowerCase();
-
-        if (normalizedProject === normalizedDir || normalizedDir.startsWith(normalizedProject + "/")) {
-            return { projectPath, ...instance };
-        }
-    }
-
-    return null;
-}
-
-function saveInstanceState(state) {
-    try {
-        writeFileSync(INSTANCES_STATE_FILE, JSON.stringify(state, null, 2));
-    } catch (err) {
-        console.warn("Failed to save instance state:", err?.message);
-    }
-}
-
-async function allocatePort(state) {
-    const usedPorts = new Set(
-        Object.values(state.instances || {}).map((i) => i.port).filter(Boolean)
-    );
+async function allocatePort() {
+    const instances = await listInstances();
+    const usedPorts = new Set(instances.map((i) => i.port).filter(Boolean));
 
     for (let port = INSTANCE_PORT_START; port <= INSTANCE_PORT_END; port++) {
         if (usedPorts.has(port)) continue;
@@ -224,10 +186,9 @@ async function probeHealth(baseUrl, timeoutMs = 5000) {
 }
 
 async function findExistingInstanceForProject(projectDirectory) {
-    const state = readInstanceState();
-    const instance = findInstanceForDirectory(state, projectDirectory);
+    const instance = await getInstance(projectDirectory);
 
-    if (!instance || !instance.baseUrl) {
+    if (!instance || !instance.base_url) {
         return null;
     }
 
@@ -237,7 +198,14 @@ async function findExistingInstanceForProject(projectDirectory) {
     }
 
     // Port is in use — trust the instance even if health probe times out
-    return instance;
+    // Map db field names to expected names for compatibility
+    return {
+        baseUrl: instance.base_url,
+        port: instance.port,
+        pid: instance.pid,
+        status: instance.status,
+        startedAt: instance.started_at,
+    };
 }
 
 async function spawnInstanceForProject(projectDirectory) {
@@ -249,8 +217,7 @@ async function spawnInstanceForProject(projectDirectory) {
 
     console.log(`Spawning new OpenCode instance for ${projectDirectory}...`);
 
-    const state = readInstanceState();
-    const port = await allocatePort(state);
+    const port = await allocatePort();
     const baseUrl = `http://127.0.0.1:${port}`;
 
     return new Promise((resolve, reject) => {
@@ -344,14 +311,13 @@ async function spawnInstanceForProject(projectDirectory) {
                     cleanup();
                     resolved = true;
 
-                    state.instances[projectDirectory] = {
-                        port,
+                    upsertInstance({
+                        projectPath: projectDirectory,
                         baseUrl,
-                        status: "ready",
+                        port,
                         pid: child.pid,
-                        startedAt: Date.now(),
-                    };
-                    saveInstanceState(state);
+                        status: "ready",
+                    });
 
                     console.log(`Instance ready: ${projectDirectory} -> ${baseUrl}`);
                     resolve({ baseUrl, pid: child.pid, port });
@@ -368,22 +334,20 @@ async function getOrCreateAttachBaseUrl(rawValue, projectDirectory) {
         return parsed.toString().replace(/\/+$/, "");
     }
 
-    const state = readInstanceState();
-    const instance = findInstanceForDirectory(state, projectDirectory);
+    const instance = await getInstance(projectDirectory);
 
-    if (instance && instance.baseUrl && instance.status === "ready") {
+    if (instance && instance.base_url && instance.status === "ready") {
         const inUse = await isPortInUse(instance.port);
         if (inUse) {
-            // Port is bound — verify PID is alive and server is healthy
             let pidAlive = false;
             if (typeof instance.pid === "number") {
                 try { process.kill(instance.pid, 0); pidAlive = true; } catch { pidAlive = false; }
             }
             if (pidAlive) {
-                const health = await probeHealth(instance.baseUrl, 2000);
+                const health = await probeHealth(instance.base_url, 2000);
                 if (health.ok) {
-                    console.log(`Found matching instance for ${projectDirectory}: ${instance.baseUrl}`);
-                    return instance.baseUrl;
+                    console.log(`Found matching instance for ${projectDirectory}: ${instance.base_url}`);
+                    return instance.base_url;
                 }
                 console.log(`Instance found but unhealthy (${health.reason}), killing stale PID...`);
                 try { process.kill(instance.pid, "SIGTERM"); } catch {}
@@ -392,10 +356,7 @@ async function getOrCreateAttachBaseUrl(rawValue, projectDirectory) {
             } else {
                 console.log(`Instance found but PID ${instance.pid} is dead — will spawn new`);
             }
-            // Clean stale entry and fall through to spawn
-            const state = readInstanceState();
-            delete state.instances?.[projectDirectory];
-            saveInstanceState(state);
+            await deleteInstance(projectDirectory);
         } else {
             console.log(`Instance found but port not in use — will spawn new`);
         }
@@ -658,12 +619,10 @@ async function runKillAll() {
     });
 
     try {
-        if (existsSync(INSTANCES_STATE_FILE)) {
-            unlinkSync(INSTANCES_STATE_FILE);
-            console.log("Removed instance state file.");
-        }
+        clearAllInstances();
+        console.log("Cleared all instances from database.");
     } catch (err) {
-        console.warn("Failed to remove state file:", err?.message);
+        console.warn("Failed to clear instances:", err?.message);
     }
 
     console.log("Done. All OpenCode server instances have been terminated.");

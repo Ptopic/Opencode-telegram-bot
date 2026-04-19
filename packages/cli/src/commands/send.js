@@ -3,30 +3,8 @@
  * Sends a prompt to the active session of a project and prints the reply.
  * Automatically uses the mode set via `opencode-telegram mode <index>`.
  */
-import { readFileSync, existsSync } from "node:fs";
-import path from "node:path";
-import { homedir } from "node:os";
 import { listSessions, sendPrompt } from "../api-client.js";
-
-const STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
-
-function readState() {
-  if (!existsSync(STATE_FILE)) return { instances: {}, activeSession: {} };
-  try {
-    return JSON.parse(readFileSync(STATE_FILE, "utf8"));
-  } catch {
-    return { instances: {}, activeSession: {} };
-  }
-}
-
-function findInstanceForPath(state, projectPath) {
-  const normalized = projectPath.replace(/\/+$/, "").toLowerCase();
-  for (const [p, inst] of Object.entries(state.instances ?? {})) {
-    const np = p.replace(/\/+$/, "").toLowerCase();
-    if (np === normalized) return inst;
-  }
-  return null;
-}
+import { getActiveSession, getInstance, listInstances } from "../db.js";
 
 /**
  * @param {string} prompt
@@ -40,10 +18,10 @@ export async function sendPromptCommand(prompt, projectPath) {
 
   if (!projectPath) {
     // Find the first running project
-    const state = readState();
-    for (const [p, inst] of Object.entries(state.instances ?? {})) {
+    const instances = listInstances();
+    for (const inst of instances) {
       if (inst?.status === "ready") {
-        projectPath = p;
+        projectPath = inst.project_path;
         break;
       }
     }
@@ -55,20 +33,19 @@ export async function sendPromptCommand(prompt, projectPath) {
     process.exit(1);
   }
 
-  const state = readState();
-  const instance = findInstanceForPath(state, projectPath);
+  const instance = getInstance(projectPath);
 
   if (!instance || instance.status !== "ready") {
     console.error(`No running OpenCode instance found for: ${projectPath}`);
     process.exit(1);
   }
 
-  const sessionData = state?.activeSession?.[projectPath];
+  const sessionData = getActiveSession(projectPath);
   let targetSessionId = sessionData?.sessionId;
 
   if (!targetSessionId) {
     // Pick the most recent session
-    const sessions = await listSessions(instance.baseUrl);
+    const sessions = await listSessions(instance.base_url);
     if (!sessions.length) {
       console.error("No sessions found. Create one first with 'opencode-telegram session new'.");
       process.exit(1);
@@ -79,10 +56,10 @@ export async function sendPromptCommand(prompt, projectPath) {
   // Auto-use the mode saved via `opencode-telegram mode <index>`
   const agent = sessionData?.mode ?? null;
 
-  console.error(`Sending to session ${targetSessionId} on ${instance.baseUrl}${agent ? ` (mode: ${agent})` : ""}...`);
+  console.error(`Sending to session ${targetSessionId} on ${instance.base_url}${agent ? ` (mode: ${agent})` : ""}...`);
 
   try {
-    const reply = await sendPrompt(instance.baseUrl, targetSessionId, prompt, agent);
+    const reply = await sendPrompt(instance.base_url, targetSessionId, prompt, agent);
     if (reply) {
       console.log(reply);
     } else {

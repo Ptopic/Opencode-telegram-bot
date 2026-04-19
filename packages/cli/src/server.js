@@ -4,49 +4,24 @@
  */
 import http from "node:http";
 import { URL } from "node:url";
-import { readFileSync, existsSync } from "node:fs";
-import path from "node:path";
-import { homedir } from "node:os";
 import {
-  probeHealth,
-  listSessions,
-  createSession,
-  sendPrompt,
   abortSession,
-  listModes,
-  setMode,
+  createSession,
   getSessionMessages,
+  listModes,
+  listSessions,
+  probeHealth,
+  sendPrompt,
+  setMode,
 } from "./api-client.js";
-import { getProjectRoots } from "./config.js";
-
-const STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
-
-function readState() {
-  if (!existsSync(STATE_FILE)) return { instances: {}, activeSession: {} };
-  try {
-    return JSON.parse(readFileSync(STATE_FILE, "utf8"));
-  } catch {
-    return { instances: {}, activeSession: {} };
-  }
-}
-
-function saveState(state) {
-  try {
-    writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
-  } catch (err) {
-    console.warn("Failed to save state:", err.message);
-  }
-}
-
-function findInstanceForPath(state, projectPath) {
-  if (!projectPath) return null;
-  const normalized = projectPath.replace(/\/+$/, "").toLowerCase();
-  for (const [p, inst] of Object.entries(state.instances ?? {})) {
-    const np = p.replace(/\/+$/, "").toLowerCase();
-    if (np === normalized) return inst;
-  }
-  return null;
-}
+import {
+  getActiveSession,
+  getInstance,
+  listInstances,
+  listProjects,
+  setActiveSession,
+  setMode as dbSetMode,
+} from "./db.js";
 
 function jsonResponse(res, statusCode, data) {
   res.writeHead(statusCode, {
@@ -96,51 +71,52 @@ async function handleRequest(req, res) {
   try {
     // ── GET /health ──────────────────────────────────────────────────────────
     if (pathname === "/health" && method === "GET") {
-      const state = readState();
-      const instances = Object.entries(state.instances ?? {}).map(([projectPath, inst]) => ({
-        projectPath,
-        baseUrl: inst.baseUrl,
-        port: inst.port,
-        status: inst.status,
-        pid: inst.pid,
-        startedAt: inst.startedAt,
-      }));
-      return jsonResponse(res, 200, { ok: true, instances });
+      const instances = await listInstances();
+      return jsonResponse(res, 200, {
+        ok: true,
+        instances: instances.map((inst) => ({
+          projectPath: inst.project_path,
+          baseUrl: inst.base_url,
+          port: inst.port,
+          status: inst.status,
+          pid: inst.pid,
+          startedAt: inst.started_at,
+        })),
+      });
     }
 
     // ── GET /status ─────────────────────────────────────────────────────────
     if (pathname === "/status" && method === "GET") {
-      const state = readState();
-      const roots = getProjectRoots();
-      const instances = [];
+      const instances = await listInstances();
+      const projects = await listProjects();
+      const result = [];
 
-      for (const [projectPath, inst] of Object.entries(state.instances ?? {})) {
-        if (!inst?.baseUrl) continue;
-        const health = await probeHealth(inst.baseUrl, 3000);
-        instances.push({
-          projectPath,
-          baseUrl: inst.baseUrl,
+      for (const inst of instances) {
+        if (!inst?.base_url) continue;
+        const health = await probeHealth(inst.base_url, 3000);
+        const activeSession = await getActiveSession(inst.project_path);
+        result.push({
+          projectPath: inst.project_path,
+          baseUrl: inst.base_url,
           status: health.ok ? "healthy" : "unhealthy",
           reason: health.ok ? null : health.reason,
           version: health.version ?? null,
           pid: inst.pid ?? null,
-          activeSessionId: state?.activeSession?.[projectPath] ?? null,
-          startedAt: inst.startedAt ?? null,
+          activeSessionId: activeSession?.sessionId ?? null,
+          startedAt: inst.started_at ?? null,
         });
       }
 
-      return jsonResponse(res, 200, { instances, projectRoots: roots });
+      return jsonResponse(res, 200, {
+        instances: result,
+        projectRoots: projects.map((p) => ({ type: "root", scope: p.scope, path: p.path, label: p.label })),
+      });
     }
 
     // ── GET /projects ───────────────────────────────────────────────────────
     if (pathname === "/projects" && method === "GET") {
-      const state = readState();
-      const roots = getProjectRoots();
-      const result = [];
-
-      for (const root of roots) {
-        result.push({ type: "root", scope: root.scope, path: root.path, label: root.label });
-      }
+      const projects = await listProjects();
+      const result = projects.map((p) => ({ type: "root", scope: p.scope, path: p.path, label: p.label }));
 
       return jsonResponse(res, 200, { projectRoots: result });
     }
@@ -148,20 +124,19 @@ async function handleRequest(req, res) {
     // ── GET /sessions/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/sessions/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/sessions/".length));
-      const state = readState();
-      const instance = findInstanceForPath(state, projectPath);
+      const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {
         return errorResponse(res, 404, "No running instance for this project");
       }
 
-      const sessions = await listSessions(instance.baseUrl);
-      const activeSessionId = state?.activeSession?.[projectPath] ?? null;
+      const sessions = await listSessions(instance.base_url);
+      const activeSession = await getActiveSession(projectPath);
 
       return jsonResponse(res, 200, {
         projectPath,
-        baseUrl: instance.baseUrl,
-        activeSessionId,
+        baseUrl: instance.base_url,
+        activeSessionId: activeSession?.sessionId ?? null,
         sessions,
       });
     }
@@ -172,27 +147,24 @@ async function handleRequest(req, res) {
       parts.pop(); // remove "new"
       const projectPath = decodeURIComponent(parts.join("/"));
       const body = await parseBody(req);
-      const state = readState();
-      const instance = findInstanceForPath(state, projectPath);
+      const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {
         return errorResponse(res, 404, "No running instance for this project");
       }
 
-      const session = await createSession(instance.baseUrl, {
+      const session = await createSession(instance.base_url, {
         title: body.title ?? `http-session-${Date.now()}`,
         directory: projectPath,
         cwd: projectPath,
       });
 
       // Auto-select it, preserving any existing mode
-      state.activeSession = state.activeSession ?? {};
-      const existing = state.activeSession[projectPath];
-      state.activeSession[projectPath] = {
-        ...(typeof existing === "object" && existing !== null ? existing : {}),
+      const existing = await getActiveSession(projectPath);
+      await setActiveSession(projectPath, {
         sessionId: session.id,
-      };
-      saveState(state);
+        mode: existing?.mode ?? null,
+      });
 
       return jsonResponse(res, 201, { session, activeSessionId: session.id });
     }
@@ -204,18 +176,17 @@ async function handleRequest(req, res) {
 
       if (!prompt) return errorResponse(res, 400, "Missing 'prompt' in request body");
 
-      const state = readState();
-      const instance = findInstanceForPath(state, projectPath);
+      const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {
         return errorResponse(res, 404, "No running instance for this project");
       }
 
-      const sessionData = state?.activeSession?.[projectPath] ?? {};
+      const sessionData = (await getActiveSession(projectPath)) ?? {};
       let targetSessionId = sessionId ?? sessionData.sessionId;
 
       if (!targetSessionId) {
-        const sessions = await listSessions(instance.baseUrl);
+        const sessions = await listSessions(instance.base_url);
         if (!sessions.length) return errorResponse(res, 404, "No sessions found");
         targetSessionId = sessions[sessions.length - 1].id;
       }
@@ -223,7 +194,7 @@ async function handleRequest(req, res) {
       // Auto-use saved mode unless caller explicitly passed one
       const effectiveAgent = agent ?? sessionData.mode ?? null;
 
-      const reply = await sendPrompt(instance.baseUrl, targetSessionId, prompt, effectiveAgent);
+      const reply = await sendPrompt(instance.base_url, targetSessionId, prompt, effectiveAgent);
 
       return jsonResponse(res, 200, {
         projectPath,
@@ -236,18 +207,17 @@ async function handleRequest(req, res) {
     // ── GET /watch/:project ────────────────────────────────────────────────
     if (pathname.startsWith("/watch/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/watch/".length));
-      const state = readState();
-      const instance = findInstanceForPath(state, projectPath);
+      const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {
         return errorResponse(res, 404, "No running instance for this project");
       }
 
-      const sessionData = state?.activeSession?.[projectPath] ?? {};
+      const sessionData = (await getActiveSession(projectPath)) ?? {};
       const sessionId =
         url.searchParams.get("session") ??
         sessionData.sessionId ??
-        (await listSessions(instance.baseUrl)).pop()?.id;
+        (await listSessions(instance.base_url)).pop()?.id;
 
       if (!sessionId) {
         return errorResponse(res, 404, "No session found");
@@ -266,7 +236,7 @@ async function handleRequest(req, res) {
 
       const interval = setInterval(async () => {
         try {
-          const messages = await getSessionMessages(instance.baseUrl, sessionId);
+          const messages = await getSessionMessages(instance.base_url, sessionId);
 
           if (messages.length > seenCount) {
             const newMessages = messages.slice(seenCount);
@@ -291,10 +261,10 @@ async function handleRequest(req, res) {
     if (pathname === "/debug/raw-sse" && method === "GET") {
       const sessionId = url.searchParams.get("session");
       if (!sessionId) return errorResponse(res, 400, "Missing ?session=");
-      const state = readState();
+      const instances = await listInstances();
       let baseUrl = null;
-      for (const inst of Object.values(state.instances ?? {})) {
-        if (inst?.status === "ready") { baseUrl = inst.baseUrl; break; }
+      for (const inst of instances) {
+        if (inst?.status === "ready") { baseUrl = inst.base_url; break; }
       }
       if (!baseUrl) return errorResponse(res, 500, "No healthy instance");
 
@@ -318,7 +288,7 @@ async function handleRequest(req, res) {
           buf = lines.pop() ?? "";
           for (const l of lines) {
             if (l.startsWith("data:") || l.startsWith("event:") || l.startsWith("id:")) {
-              res.write(l + "\n");
+              res.write(`${l}\n`);
             }
           }
           count++;
@@ -334,10 +304,10 @@ async function handleRequest(req, res) {
     if (pathname === "/debug/sse-raw" && method === "GET") {
       const sessionId = url.searchParams.get("session");
       if (!sessionId) return errorResponse(res, 400, "Missing ?session=");
-      const state = readState();
+      const instances = await listInstances();
       let baseUrl = null;
-      for (const inst of Object.values(state.instances ?? {})) {
-        if (inst?.status === "ready") { baseUrl = inst.baseUrl; break; }
+      for (const inst of instances) {
+        if (inst?.status === "ready") { baseUrl = inst.base_url; break; }
       }
       if (!baseUrl) return errorResponse(res, 500, "No healthy instance");
 
@@ -365,7 +335,7 @@ async function handleRequest(req, res) {
           buf = lines.pop() ?? "";
           for (const l of lines) {
             if (l.startsWith("data:") || l.startsWith("event:") || l.startsWith("id:") || l.trim()) {
-              res.write(l + "\n");
+              res.write(`${l}\n`);
             }
           }
         }
@@ -383,39 +353,31 @@ async function handleRequest(req, res) {
     // ── GET /modes/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/modes/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length));
-      const state = readState();
-      const instance = findInstanceForPath(state, projectPath);
+      const instance = await getInstance(projectPath);
       if (!instance || instance.status !== "ready") {
         return errorResponse(res, 404, "No running instance for this project");
       }
-      const modes = await listModes(instance.baseUrl);
-      return jsonResponse(res, 200, { projectPath, baseUrl: instance.baseUrl, modes });
+      const modes = await listModes(instance.base_url);
+      return jsonResponse(res, 200, { projectPath, baseUrl: instance.base_url, modes });
     }
 
     // ── POST /modes/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/modes/") && pathname.endsWith("/mode") && method === "POST") {
       const projectPath = decodeURIComponent(pathname.slice("/modes/".length, -5)); // strip "/mode"
       const body = await parseBody(req);
-      const state = readState();
-      const instance = findInstanceForPath(state, projectPath);
+      const instance = await getInstance(projectPath);
       if (!instance || instance.status !== "ready") {
         return errorResponse(res, 404, "No running instance for this project");
       }
-      const sessionData = state?.activeSession?.[projectPath];
-      const sessionId = body.sessionId ?? (typeof sessionData === "string" ? sessionData : sessionData?.sessionId);
+      const sessionData = await getActiveSession(projectPath);
+      const sessionId = body.sessionId ?? sessionData?.sessionId;
       if (!sessionId) {
         return errorResponse(res, 400, "No active session");
       }
-      await setMode(instance.baseUrl, sessionId, body.mode);
+      await setMode(instance.base_url, sessionId, body.mode);
 
-      // Persist mode to local state file
-      state.activeSession = state.activeSession ?? {};
-      const existing = state.activeSession[projectPath];
-      state.activeSession[projectPath] = {
-        ...(typeof existing === "object" && existing !== null ? existing : {}),
-        mode: body.mode,
-      };
-      saveState(state);
+      // Persist mode to database
+      await dbSetMode(projectPath, body.mode);
 
       return jsonResponse(res, 200, { ok: true, mode: body.mode, sessionId });
     }
@@ -425,17 +387,17 @@ async function handleRequest(req, res) {
       const body = await parseBody(req);
       const { project: projectPath, sessionId } = body;
 
-      const state = readState();
-      const instance = findInstanceForPath(state, projectPath);
+      const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {
         return errorResponse(res, 404, "No running instance for this project");
       }
 
-      const targetSessionId = sessionId ?? state?.activeSession?.[projectPath];
+      const activeSession = await getActiveSession(projectPath);
+      const targetSessionId = sessionId ?? activeSession?.sessionId;
       if (!targetSessionId) return errorResponse(res, 400, "No active session");
 
-      await abortSession(instance.baseUrl, targetSessionId);
+      await abortSession(instance.base_url, targetSessionId);
       return jsonResponse(res, 200, { ok: true, sessionId: targetSessionId });
     }
 
@@ -447,15 +409,12 @@ async function handleRequest(req, res) {
 
       try {
         const { projectStartCommand } = await import("./commands/project.js");
-        // Start the instance (writes to state file)
         await projectStartCommand(projectPath);
-        // Re-read state to get the new instance info
-        const state = readState();
-        const instance = findInstanceForPath(state, projectPath);
+        const instance = await getInstance(projectPath);
         return jsonResponse(res, 200, {
           ok: true,
           projectPath,
-          instance: instance ? { baseUrl: instance.baseUrl, port: instance.port, pid: instance.pid, status: instance.status } : null,
+          instance: instance ? { baseUrl: instance.base_url, port: instance.port, pid: instance.pid, status: instance.status } : null,
         });
       } catch (err) {
         return errorResponse(res, 500, `Failed to start project: ${err.message}`);
@@ -577,8 +536,8 @@ async function startFileWatcher() {
     }, 1000);
   };
 
-  fs.watch(watchDir, { recursive: true }, (eventType, filename) => {
-    if (filename && filename.endsWith(".js")) {
+  fs.watch(watchDir, { recursive: true }, (_eventType, filename) => {
+    if (filename?.endsWith(".js")) {
       restart();
     }
   });

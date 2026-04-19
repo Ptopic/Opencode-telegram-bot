@@ -1,30 +1,8 @@
 /**
  * session list / session switch / session new
  */
-import { readFileSync, existsSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { homedir } from "node:os";
-import { listSessions, createSession, getSession, deleteSession } from "../api-client.js";
-
-const STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
-
-function readState() {
-  if (!existsSync(STATE_FILE)) return { instances: {} };
-  try {
-    return JSON.parse(readFileSync(STATE_FILE, "utf8"));
-  } catch {
-    return { instances: {} };
-  }
-}
-
-function findInstanceForPath(state, projectPath) {
-  const normalized = projectPath.replace(/\/+$/, "").toLowerCase();
-  for (const [p, inst] of Object.entries(state.instances ?? {})) {
-    const np = p.replace(/\/+$/, "").toLowerCase();
-    if (np === normalized) return inst;
-  }
-  return null;
-}
+import { createSession, getSession, listSessions } from "../api-client.js";
+import { getActiveSession, getInstance, setActiveSession } from "../db.js";
 
 /**
  * List sessions for a project.
@@ -35,22 +13,21 @@ export async function listSessionsCommand(projectPath) {
     process.exit(1);
   }
 
-  const state = readState();
-  const instance = findInstanceForPath(state, projectPath);
+  const instance = getInstance(projectPath);
 
   if (!instance || instance.status !== "ready") {
     console.log("No running OpenCode instance found for this project. Start it with 'opencode-telegram start' from Telegram.");
     return;
   }
 
-  const sessions = await listSessions(instance.baseUrl);
+  const sessions = await listSessions(instance.base_url);
 
   if (!sessions.length) {
     console.log("No sessions found.");
     return;
   }
 
-  const currentId = findCurrentSessionId(state, projectPath);
+  const currentId = findCurrentSessionId(projectPath);
 
   console.log(`Sessions for ${projectPath}:`);
   for (const s of sessions) {
@@ -69,8 +46,7 @@ export async function switchSessionCommand(projectPath, targetSessionId) {
     process.exit(1);
   }
 
-  const state = readState();
-  const instance = findInstanceForPath(state, projectPath);
+  const instance = getInstance(projectPath);
 
   if (!instance || instance.status !== "ready") {
     console.error("No running OpenCode instance found for this project.");
@@ -79,20 +55,17 @@ export async function switchSessionCommand(projectPath, targetSessionId) {
 
   // Verify session exists
   try {
-    await getSession(instance.baseUrl, targetSessionId);
+    await getSession(instance.base_url, targetSessionId);
   } catch {
     console.error(`Session '${targetSessionId}' not found on this instance.`);
     process.exit(1);
   }
 
   // Persist the active session, preserving any existing mode
-  state.activeSession = state.activeSession ?? {};
-  const existing = state.activeSession[projectPath];
-  state.activeSession[projectPath] = {
-    ...(typeof existing === "object" && existing !== null ? existing : {}),
+  setActiveSession(projectPath, {
     sessionId: targetSessionId,
-  };
-  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    mode: getActiveSession(projectPath)?.mode,
+  });
 
   console.log(`Switched to session ${targetSessionId} for ${projectPath}`);
 }
@@ -106,8 +79,7 @@ export async function newSessionCommand(projectPath) {
     process.exit(1);
   }
 
-  const state = readState();
-  const instance = findInstanceForPath(state, projectPath);
+  const instance = getInstance(projectPath);
 
   if (!instance || instance.status !== "ready") {
     console.error("No running OpenCode instance found for this project.");
@@ -115,25 +87,21 @@ export async function newSessionCommand(projectPath) {
   }
 
   const title = `cli-session-${Date.now()}`;
-  const session = await createSession(instance.baseUrl, { title, directory: projectPath, cwd: projectPath });
+  const session = await createSession(instance.base_url, { title, directory: projectPath, cwd: projectPath });
 
   console.log(`Created session: ${session.id}`);
   console.log(`  Title: ${title}`);
   console.log(`  Project: ${projectPath}`);
 
   // Auto-select it, preserving any existing mode
-  state.activeSession = state.activeSession ?? {};
-  const existing = state.activeSession[projectPath];
-  state.activeSession[projectPath] = {
-    ...(typeof existing === "object" && existing !== null ? existing : {}),
+  setActiveSession(projectPath, {
     sessionId: session.id,
-  };
-  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    mode: getActiveSession(projectPath)?.mode,
+  });
 }
 
-function findCurrentSessionId(state, projectPath) {
-  const val = state?.activeSession?.[projectPath];
-  if (!val) return null;
-  if (typeof val === "string") return val;
-  return val.sessionId ?? null;
+function findCurrentSessionId(projectPath) {
+  const active = getActiveSession(projectPath);
+  if (!active) return null;
+  return active.sessionId ?? null;
 }

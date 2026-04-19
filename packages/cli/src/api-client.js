@@ -284,7 +284,7 @@ export async function listModes(baseUrl) {
       return true;
     })
     .map((agent) => ({
-      name: agent.name.trim(),
+      name: agent.name,
       description: typeof agent.description === "string" ? agent.description.trim() : "",
     }));
 

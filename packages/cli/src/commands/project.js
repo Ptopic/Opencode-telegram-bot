@@ -3,55 +3,46 @@
  * project stop <path>   — stop the OpenCode server instance for a project
  * project list          — list running instances (alias: opencode-telegram projects list)
  */
-import { readFileSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
-import path from "node:path";
 import { spawn } from "node:child_process";
-import { homedir } from "node:os";
 import { createConnection } from "node:net";
 import { probeHealth } from "../api-client.js";
 import { getProjectRoots } from "../config.js";
+import {
+  deleteInstance,
+  getInstance,
+  listInstances,
+  updateInstanceStatus,
+  upsertInstance,
+} from "../db.js";
 
-const STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
 const INSTANCE_PORT_START = 50000;
 const INSTANCE_PORT_END = 59999;
 const INSTANCE_STARTUP_TIMEOUT_MS = 30_000;
 
-// ── State helpers ──────────────────────────────────────────────────────────────
+// ── Instance helpers ───────────────────────────────────────────────────────────
 
-function readState() {
-  if (!existsSync(STATE_FILE)) return { instances: {}, activeSession: {} };
-  try {
-    return JSON.parse(readFileSync(STATE_FILE, "utf8"));
-  } catch {
-    return { instances: {}, activeSession: {} };
-  }
-}
-
-function saveState(state) {
-  try {
-    writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
-  } catch (err) {
-    console.warn("Failed to save state:", err.message);
-  }
-}
-
-function findInstanceForPath(state, projectPath) {
+function findInstanceForPath(projectPath) {
   const normalized = projectPath.replace(/\/+$/, "").toLowerCase();
-  for (const [p, inst] of Object.entries(state.instances ?? {})) {
-    const np = p.replace(/\/+$/, "").toLowerCase();
-    if (np !== normalized) continue;
-    // Verify the PID is still alive before returning the entry
-    if (typeof inst.pid === "number") {
-      try {
-        process.kill(inst.pid, 0); // signal 0 just checks if process exists
-      } catch {
-        // Process is dead — treat as no entry
-        return null;
-      }
+  const inst = getInstance(normalized);
+  if (!inst) return null;
+
+  // Verify the PID is still alive before returning the entry
+  if (typeof inst.pid === "number") {
+    try {
+      process.kill(inst.pid, 0); // signal 0 just checks if process exists
+    } catch {
+      // Process is dead — treat as no entry
+      return null;
     }
-    return { projectPath: p, ...inst };
   }
-  return null;
+  return {
+    projectPath: inst.project_path,
+    baseUrl: inst.base_url,
+    port: inst.port,
+    pid: inst.pid,
+    status: inst.status,
+    startedAt: inst.started_at,
+  };
 }
 
 // ── Port helpers ───────────────────────────────────────────────────────────────
@@ -69,8 +60,9 @@ async function isPortInUse(port) {
   });
 }
 
-async function allocatePort(state) {
-  const usedPorts = new Set(Object.values(state.instances ?? {}).map((i) => i.port).filter(Boolean));
+async function allocatePort() {
+  const allInstances = listInstances();
+  const usedPorts = new Set(allInstances.map((i) => i.port).filter(Boolean));
   for (let port = INSTANCE_PORT_START; port <= INSTANCE_PORT_END; port++) {
     if (usedPorts.has(port)) continue;
     if (!(await isPortInUse(port))) return port;
@@ -114,17 +106,8 @@ async function waitForPort(port, timeoutMs = 5000) {
 
 // ── Instance lifecycle ─────────────────────────────────────────────────────────
 
-function spawnChild(command, args, options) {
-  return spawn(command, args, {
-    stdio: "ignore",
-    env: { ...process.env },
-    ...options,
-  });
-}
-
 async function spawnInstanceForProject(projectDirectory) {
-  const state = readState();
-  const existing = findInstanceForPath(state, projectDirectory);
+  const existing = findInstanceForPath(projectDirectory);
   if (existing && existing.status === "ready") {
     const portInUse = await isPortInUse(existing.port);
     if (portInUse) {
@@ -148,16 +131,24 @@ async function spawnInstanceForProject(projectDirectory) {
       } else {
         console.log(`[spawn] PID ${existing.pid} is dead — cleaning up stale entry`);
       }
-      // Clean up stale state entry and proceed to respawn
-      const state = readState();
-      delete state.instances[projectDirectory];
-      saveState(state);
+      // Clean up stale instance and proceed to respawn
+      deleteInstance(projectDirectory);
     }
   }
-  const port = await allocatePort(state);
+
+  const port = await allocatePort();
   const baseUrl = `http://127.0.0.1:${port}`;
 
   console.log(`Spawning OpenCode instance for ${projectDirectory} on port ${port}...`);
+
+  // Create initial instance entry with 'starting' status
+  upsertInstance({
+    projectPath: projectDirectory,
+    baseUrl,
+    port,
+    pid: null,
+    status: "starting",
+  });
 
   return new Promise((resolve, reject) => {
     let stdoutBuffer = "";
@@ -176,14 +167,13 @@ async function spawnInstanceForProject(projectDirectory) {
       if (resolved) return;
       resolved = true;
       cleanup();
-      state.instances[projectDirectory] = {
-        port: inst.port,
+      upsertInstance({
+        projectPath: projectDirectory,
         baseUrl: inst.baseUrl,
-        status: "ready",
+        port: inst.port,
         pid: inst.pid,
-        startedAt: Date.now(),
-      };
-      saveState(state);
+        status: "ready",
+      });
       resolve(inst);
     };
 
@@ -191,6 +181,7 @@ async function spawnInstanceForProject(projectDirectory) {
       if (resolved) return;
       resolved = true;
       cleanup();
+      updateInstanceStatus(projectDirectory, "failed");
       reject(err);
     };
 
@@ -244,8 +235,7 @@ async function spawnInstanceForProject(projectDirectory) {
 }
 
 async function stopInstanceForProject(projectDirectory) {
-  const state = readState();
-  const instance = findInstanceForPath(state, projectDirectory);
+  const instance = findInstanceForPath(projectDirectory);
 
   if (!instance) {
     console.log(`No running instance found for: ${projectDirectory}`);
@@ -272,9 +262,7 @@ async function stopInstanceForProject(projectDirectory) {
     console.warn(`Kill warning: ${err.message}`);
   }
 
-  // Remove from state
-  delete state.instances[projectDirectory];
-  saveState(state);
+  deleteInstance(projectDirectory);
   console.log(`Instance stopped.`);
 }
 
@@ -285,9 +273,6 @@ export async function projectStartCommand(projectPath) {
     projectPath = process.cwd();
     console.log(`No path given — using current directory: ${projectPath}`);
   }
-
-  const state = readState();
-  const existing = findInstanceForPath(state, projectPath);
 
   try {
     const instance = await spawnInstanceForProject(projectPath);
@@ -315,20 +300,19 @@ export async function projectStopCommand(projectPath) {
 }
 
 export async function projectListCommand() {
-  const state = readState();
   const roots = getProjectRoots();
 
   console.log("=== Running Instances ===");
-  const running = Object.entries(state.instances ?? {});
+  const running = listInstances();
   if (running.length === 0) {
     console.log("No running instances.");
   }
 
-  for (const [projectPath, instance] of running) {
-    if (!instance?.baseUrl) continue;
-    const health = await probeHealth(instance.baseUrl, 2000).catch(() => ({ ok: false }));
-    const status = health.ok ? `● ${instance.baseUrl}` : `✗ ${health.reason ?? "unhealthy"}`;
-    console.log(`  ${status}  ${projectPath}`);
+  for (const inst of running) {
+    if (!inst?.base_url) continue;
+    const health = await probeHealth(inst.base_url, 2000).catch(() => ({ ok: false }));
+    const status = health.ok ? `● ${inst.base_url}` : `✗ ${health.reason ?? "unhealthy"}`;
+    console.log(`  ${status}  ${inst.project_path}`);
   }
 
   console.log("\n=== Project Roots ===");
