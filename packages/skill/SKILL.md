@@ -18,11 +18,9 @@ pnpm install
 
 ## Key Rule
 
-**If unsure what commands are available, run `opencode-telegram help` first.** This always reflects the actual CLI surface — use it to recover if this skill is outdated.
+**If unsure what commands are available, run `opencode-telegram help` first.**
 
 ## HTTP API (Cloudflare Tunnel)
-
-When the HTTP server is running and tunneled via cloudflared, I can call it directly from the cloud.
 
 ### Start the HTTP API server on your Mac
 
@@ -36,23 +34,21 @@ opencode-telegram serve --port 4097
 cloudflared tunnel --url http://localhost:4097 --hostname cli.petartopic.com
 ```
 
-Keep both running (e.g. in a `screen` or `tmux` session).
-
 ### API Base URL
 
-**Important:** Use `https://cli.petartopic.com` as the base URL for all API calls.
+Use `https://cli.petartopic.com` as the base URL for all API calls.
 
 ## Complete OpenClaw Agent Workflow
 
-When Petar asks me to work on a project, I should use the HTTP API:
+**IMPORTANT:** Follow these exact steps in order. Always URL-encode project paths.
 
-### Step 1: Ensure project is running
+### Step 1: Check if project is running
 
 ```bash
 curl https://cli.petartopic.com/health
 ```
 
-If no instance for the project, start it:
+### Step 2: Start project if needed
 
 ```bash
 curl -X POST https://cli.petartopic.com/project/start \
@@ -60,162 +56,146 @@ curl -X POST https://cli.petartopic.com/project/start \
   -d '{"project": "/Users/petartopic/Desktop/Petar/Employee-tracker"}'
 ```
 
-### Step 2: Get available agents
+### Step 3: Get available agents
 
 ```bash
-curl "https://cli.petartopic.com/modes/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Project/path'))")"
+curl "https://cli.petartopic.com/modes/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Petar/Employee-tracker'))")"
 ```
 
-The response includes agent names with their index. **Agent names have leading unicode zero-width spaces — use the EXACT name returned, including those characters.**
-
-Example response:
+The response:
 ```json
 {
   "modes": [
-    {"name": "\u200b\u200b\u200b\u200bAtlas - Plan Executor", "description": "..."},
+    {"name": "\u200bAtlas - Plan Executor", "description": "..."},
     {"name": "\u200b\u200bHephaestus - Deep Agent", "description": "..."},
     {"name": "\u200b\u200b\u200bPrometheus - Plan Builder", "description": "..."},
-    {"name": "\u200bSisyphus - Ultraworker", "description": "..."}
+    {"name": "Sisyphus - Ultraworker", "description": "..."}
   ]
 }
 ```
 
-### Step 3: Create a new session
+Agents are indexed 0, 1, 2, 3 in this order.
+
+### Step 4: Create a new session
 
 ```bash
-curl -X POST "https://cli.petartopic.com/sessions/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Project/path'))")/new" \
+curl -X POST "https://cli.petartopic.com/sessions/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Petar/Employee-tracker'))")/new" \
   -H "Content-Type: application/json" \
-  -d '{"title": "my-task"}'
+  -d '{"title": "task-123"}'
 ```
 
-Returns the new `sessionId`. Use this sessionId for all subsequent calls.
+Response contains `"id":"ses_xxx"`. Use this `sessionId` for all future calls.
 
-### Step 4: Set the agent mode (use index!)
+### Step 5: Set agent mode using INDEX (0, 1, 2, or 3)
 
 ```bash
-curl -X POST "https://cli.petartopic.com/modes/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Project/path'))")/mode" \
+curl -X POST "https://cli.petartopic.com/modes/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Petar/Employee-tracker'))")/mode" \
   -H "Content-Type: application/json" \
-  -d '{"mode": "0", "sessionId": "ses_xxx"}'
+  -d '{"mode": "0", "sessionId": "ses_FROM_STEP_4"}'
 ```
 
-**Use index (0, 1, 2, 3) — the server resolves it to the correct agent name automatically.** No need to worry about unicode chars or exact names!
+**The `mode` value must be a STRING containing the index number: `"0"`, `"1"`, `"2"`, or `"3"`.**
 
-### Step 5: Send prompts
+Available modes:
+- `0` — Atlas - Plan Executor
+- `1` — Hephaestus - Deep Agent
+- `2` — Prometheus - Plan Builder
+- `3` — Sisyphus - Ultraworker
+
+### Step 6: Send a prompt
 
 ```bash
 curl -X POST https://cli.petartopic.com/send \
   -H "Content-Type: application/json" \
   -d '{
-    "project": "/Users/petartopic/Desktop/Project/path",
-    "sessionId": "ses_xxx",
+    "project": "/Users/petartopic/Desktop/Petar/Employee-tracker",
+    "sessionId": "ses_FROM_STEP_4",
     "prompt": "Your task description here"
   }'
 ```
 
-If `sessionId` is omitted, uses the active session for that project.
-
-### Step 6: Stop execution if needed
+### Step 7: Stop execution if needed
 
 ```bash
 curl -X POST https://cli.petartopic.com/stop \
   -H "Content-Type: application/json" \
-  -d '{"project": "/Users/petartopic/Desktop/Project/path", "sessionId": "ses_xxx"}'
+  -d '{"project": "/Users/petartopic/Desktop/Petar/Employee-tracker", "sessionId": "ses_FROM_STEP_4"}'
+```
+
+## Common Mistakes to Avoid
+
+### WRONG: Passing mode as a number
+```json
+{"mode": 0}  // WRONG - this is a number
+```
+
+### CORRECT: Passing mode as a string
+```json
+{"mode": "0"}  // CORRECT - this is a string
+```
+
+### WRONG: Using full agent name
+```json
+{"mode": "Atlas - Plan Executor"}  // WRONG - unicode chars cause mismatch
+```
+
+### CORRECT: Using index as string
+```json
+{"mode": "0"}  // CORRECT - server resolves to correct agent
+```
+
+## Complete Working Example
+
+```bash
+# 1. Check health
+curl https://cli.petartopic.com/health
+
+# 2. Create session
+SESSION_RESP=$(curl -X POST "https://cli.petartopic.com/sessions/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Petar/Employee-tracker'))")/new" \
+  -H "Content-Type: application/json" \
+  -d '{"title": "my-task"}')
+echo $SESSION_RESP
+# Extract sessionId from response: {"session":{"id":"ses_xxx",...}}
+
+# 3. Set mode to Atlas (index 0)
+curl -X POST "https://cli.petartopic.com/modes/$(python3 -c "import urllib.parse; print(urllib.parse.quote('/Users/petartopic/Desktop/Petar/Employee-tracker'))")/mode" \
+  -H "Content-Type: application/json" \
+  -d '{"mode": "0", "sessionId": "ses_FROM_ABOVE"}'
+
+# 4. Send prompt
+curl -X POST https://cli.petartopic.com/send \
+  -H "Content-Type: application/json" \
+  -d '{"project": "/Users/petartopic/Desktop/Petar/Employee-tracker", "sessionId": "ses_FROM_ABOVE", "prompt": "Hello"}'
 ```
 
 ## API Endpoints Reference
 
 | Method | Path | Body | Description |
 |--------|------|------|-------------|
-| GET | `/health` | — | Server health + running instances |
-| GET | `/status` | — | Detailed status of all instances |
-| GET | `/projects` | — | Project roots |
-| GET | `/sessions/:project` | — | List sessions for a project |
-| POST | `/sessions/:project/new` | `{ title? }` | Create new session, returns `session.id` |
-| GET | `/modes/:project` | — | List available agents (with unicode chars) |
-| POST | `/modes/:project/mode` | `{ mode, sessionId? }` | Set agent mode |
-| POST | `/send` | `{ project, prompt, sessionId? }` | Send a prompt |
-| GET | `/watch/:project` | — | SSE stream of session messages |
-| POST | `/stop` | `{ project, sessionId? }` | Abort current execution |
-| POST | `/project/start` | `{ project }` | Start a project instance |
-| POST | `/project/stop` | `{ project }` | Stop a project instance |
-
-### URL Encoding
-
-For paths with project paths, URL-encode the path:
-```bash
-python3 -c "import urllib.parse; print(urllib.parse.quote('/path/to/project'))"
-```
-
-Example: `/Users/petartopic/Desktop/Project` → `%2FUsers%2Fpetartopic%2FDesktop%2FProject`
-
-## Available Agents
-
-The 4 main agents (fetched from OpenCode `/agent` endpoint):
-
-| Index | Name | Description |
-|-------|------|-------------|
-| 0 | Atlas - Plan Executor | Orchestrates work via task() to complete ALL tasks in a todo list |
-| 1 | Hephaestus - Deep Agent | Autonomous Deep Worker - goal-oriented execution |
-| 2 | Prometheus - Plan Builder | Plan agent |
-| 3 | Sisyphus - Ultraworker | Powerful AI orchestrator with strategic delegation |
-
-**Use index (0, 1, 2, 3) when setting mode via API.** The server resolves it automatically.
+| GET | `/health` | — | Server health + instances |
+| GET | `/status` | — | Detailed status |
+| POST | `/project/start` | `{"project": "path"}` | Start project instance |
+| POST | `/sessions/:project/new` | `{"title": "name"}` | Create session, returns `session.id` |
+| GET | `/modes/:project` | — | List agents (indices 0-3) |
+| POST | `/modes/:project/mode` | `{"mode": "0", "sessionId": "ses_xxx"}` | Set agent by INDEX |
+| POST | `/send` | `{"project", "sessionId", "prompt"}` | Send prompt |
+| POST | `/stop` | `{"project", "sessionId"}` | Abort execution |
 
 ## CLI Commands (Local)
 
-When running commands directly on Petar's Mac:
-
-### Start/stop project instances
 ```bash
-opencode-telegram project start <project-path>
-opencode-telegram project stop <project-path>
-opencode-telegram project list
-```
-
-### Manage sessions
-```bash
-opencode-telegram session list <project-path>
-opencode-telegram session new <project-path>
-opencode-telegram session switch <project-path> <session-id>
-```
-
-### Agent mode selection
-```bash
-opencode-telegram mode list --project <project-path>
-opencode-telegram mode <index> --project <project-path>
-```
-
-### Send a prompt
-```bash
-opencode-telegram send "fix the login bug" --project <project-path>
-```
-
-### Stop execution
-```bash
-opencode-telegram stop --project <project-path>
-```
-
-### Watch session activity
-```bash
-opencode-telegram watch <project-path>
-```
-
-### Status & logs
-```bash
+opencode-telegram project start <path>
+opencode-telegram project stop <path>
+opencode-telegram session list <path>
+opencode-telegram session new <path>
+opencode-telegram mode list --project <path>
+opencode-telegram mode <0-3> --project <path>
+opencode-telegram send "prompt" --project <path>
+opencode-telegram stop --project <path>
 opencode-telegram status
-opencode-telegram logs <project-path>
-```
-
-### Kill all instances
-```bash
 opencode-telegram kill-all
 ```
 
-## State Management
+## State
 
-State is stored in SQLite database at `~/.opencode-telegram.db`:
-- `instances` table: running OpenCode server processes
-- `active_sessions` table: active session + mode per project
-- `projects` table: project root configurations
-
-This means state persists across server restarts and is shared between CLI and API.
+State is stored in SQLite at `~/.opencode-telegram.db`.
