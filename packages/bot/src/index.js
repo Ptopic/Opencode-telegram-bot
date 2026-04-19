@@ -2415,7 +2415,6 @@ async function switchProjectBySlug(chatId, slug) {
     // Switch the TUI to display the new session
     await tuiSelectSession(runtime, sessionId);
 
-    await syncTelegramCommands();
     await syncTelegramChatFromSession(chatId, runtime, sessionId, { clearChat: true });
 
     return {

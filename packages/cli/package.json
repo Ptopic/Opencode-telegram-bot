@@ -1,0 +1,21 @@
+{
+  "name": "@opencode-telegram/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "OpenCode Telegram CLI — start bot, attach sessions, manage instances",
+  "bin": {
+    "opencode-telegram": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node ./src/index.js",
+    "dev": "node ./src/index.js dev",
+    "attach": "node ./src/index.js attach",
+    "kill-all": "node ./src/index.js kill-all",
+    "clean": "rm -f ~/.opencode-telegram-instances.json"
+  },
+  "dependencies": {
+    "@opencode-telegram/bot": "workspace:*",
+    "axios": "^1.6.0",
+    "better-sqlite3": "^11.0.0"
+  }
+}

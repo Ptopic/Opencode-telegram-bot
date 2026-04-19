@@ -1,0 +1,43 @@
+# opencode-telegram bash completion
+# Source this file: source /path/to/completions/bash
+
+_opencode_telegram() {
+    local cur prev words cword
+    _init_completion || return
+
+    local commands="start bot cli projects session send stop mode help kill-all status logs attach"
+
+    if [[ $cword -eq 1 ]]; then
+        COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+        return
+    fi
+
+    local subcommand="${words[1]}"
+
+    case "$subcommand" in
+        start)
+            COMPREPLY=($(compgen -W "bot cli all" -- "$cur"))
+            ;;
+        projects)
+            COMPREPLY=($(compgen -W "list" -- "$cur"))
+            ;;
+        session)
+            COMPREPLY=($(compgen -W "list switch new" -- "$cur"))
+            ;;
+        mode)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=($(compgen -W "--project" -- "$cur"))
+            else
+                COMPREPLY=($(compgen -W "list agent auto plan" -- "$cur"))
+            fi
+            ;;
+        send)
+            # Everything else is the prompt — no completion needed
+            ;;
+        stop|logs)
+            COMPREPLY=($(compgen -W "--project" -- "$cur"))
+            ;;
+    esac
+}
+
+complete -F _opencode_telegram opencode-telegram

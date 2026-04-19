@@ -1,23 +1,22 @@
 {
-	"name": "opencode-telegram",
-	"version": "0.1.0",
-	"type": "module",
-	"bin": {
-		"opencode-telegram": "./bin/opencode-telegram.js"
-	},
-	"scripts": {
-		"dev": "node ./bin/opencode-telegram.js dev",
-		"attach": "node ./bin/opencode-telegram.js attach",
-		"kill-all": "node ./bin/opencode-telegram.js kill-all",
-		"start": "node ./bin/opencode-telegram.js",
-		"start:watch": "nodemon --watch bot.js --watch bin/opencode-telegram.js --exec \"node ./bin/opencode-telegram.js\""
-	},
-	"dependencies": {
-		"axios": "^1.6.0",
-		"difit": "^3.1.16",
-		"node-telegram-bot-api": "^0.64.0"
-	},
-	"devDependencies": {
-		"nodemon": "^3.1.10"
-	}
+  "name": "opencode-telegram",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Monorepo for OpenCode Telegram bot, CLI client, and OpenClaw skill",
+  "scripts": {
+    "start": "pnpm --filter @opencode-telegram/cli start",
+    "dev": "pnpm --filter @opencode-telegram/cli dev",
+    "attach": "pnpm --filter @opencode-telegram/cli attach",
+    "kill-all": "pnpm --filter @opencode-telegram/cli kill-all",
+    "build": "pnpm -r run build",
+    "clean": "pnpm -r run clean"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "dependencies": {
+    "axios": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
 }

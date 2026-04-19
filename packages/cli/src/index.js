@@ -1,17 +1,33 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
 import { createConnection } from "node:net";
+import { listProjects } from "./commands/projects.js";
+import {
+    listSessionsCommand,
+    switchSessionCommand,
+    newSessionCommand,
+} from "./commands/session.js";
+import { sendPromptCommand } from "./commands/send.js";
+import { stopCommand } from "./commands/stop.js";
+import { setModeCommand } from "./commands/mode.js";
+import { statusCommand } from "./commands/status.js";
+import { logsCommand } from "./commands/logs.js";
+import { watchCommand } from "./commands/watch.js";
+import { startServer } from "./server.js";
+import { projectStartCommand, projectStopCommand, projectListCommand } from "./commands/project.js";
+import { helpCommand } from "./commands/help.js";
+import { clearAllInstances, getInstance, listInstances, deleteInstance, upsertInstance } from "./db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+// repoRoot: packages/cli/src/index.js -> packages/cli -> packages -> repo root
+const repoRoot = path.resolve(__dirname, "../../..");
 const packageRoot = path.resolve(__dirname, "..");
 
-const INSTANCES_STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
 const INSTANCE_PORT_START = Number(process.env.OPENCODE_INSTANCE_PORT_START) || 50000;
 const INSTANCE_PORT_END = Number(process.env.OPENCODE_INSTANCE_PORT_END) || 59999;
 const INSTANCE_STARTUP_TIMEOUT_MS = 30000;
@@ -54,9 +70,9 @@ const explicitEnv = process.env.OPENCODE_TELEGRAM_ENV_FILE;
 if (explicitEnv) {
     tryLoadEnv(path.resolve(process.cwd(), explicitEnv));
 } else {
-    tryLoadEnv(path.resolve(process.cwd(), ".env"));
-    tryLoadEnv(path.resolve(process.cwd(), "..", ".env"));
-    tryLoadEnv(path.resolve(packageRoot, "..", ".env"));
+    tryLoadEnv(path.resolve(repoRoot, ".env"));
+    tryLoadEnv(path.resolve(repoRoot, "..", ".env"));
+    tryLoadEnv(path.resolve(packageRoot, ".env"));
 }
 
 function hasChildExited(child) {
@@ -68,46 +84,9 @@ function defaultAttachSessionTitle(projectDirectory) {
     return `${path.basename(projectDirectory) || "project"}-local-${timestamp}`;
 }
 
-function readInstanceState() {
-    if (!existsSync(INSTANCES_STATE_FILE)) {
-        return { instances: {} };
-    }
-
-    try {
-        const content = readFileSync(INSTANCES_STATE_FILE, "utf8");
-        const data = JSON.parse(content);
-        return data;
-    } catch {
-        return { instances: {} };
-    }
-}
-
-function findInstanceForDirectory(state, directory) {
-    const normalizedDir = directory.replace(/\/+$/, "").toLowerCase();
-
-    for (const [projectPath, instance] of Object.entries(state.instances || {})) {
-        const normalizedProject = projectPath.replace(/\/+$/, "").toLowerCase();
-
-        if (normalizedProject === normalizedDir || normalizedDir.startsWith(normalizedProject + "/")) {
-            return { projectPath, ...instance };
-        }
-    }
-
-    return null;
-}
-
-function saveInstanceState(state) {
-    try {
-        writeFileSync(INSTANCES_STATE_FILE, JSON.stringify(state, null, 2));
-    } catch (err) {
-        console.warn("Failed to save instance state:", err?.message);
-    }
-}
-
-async function allocatePort(state) {
-    const usedPorts = new Set(
-        Object.values(state.instances || {}).map((i) => i.port).filter(Boolean)
-    );
+async function allocatePort() {
+    const instances = await listInstances();
+    const usedPorts = new Set(instances.map((i) => i.port).filter(Boolean));
 
     for (let port = INSTANCE_PORT_START; port <= INSTANCE_PORT_END; port++) {
         if (usedPorts.has(port)) continue;
@@ -207,10 +186,9 @@ async function probeHealth(baseUrl, timeoutMs = 5000) {
 }
 
 async function findExistingInstanceForProject(projectDirectory) {
-    const state = readInstanceState();
-    const instance = findInstanceForDirectory(state, projectDirectory);
+    const instance = await getInstance(projectDirectory);
 
-    if (!instance || !instance.baseUrl) {
+    if (!instance || !instance.base_url) {
         return null;
     }
 
@@ -219,12 +197,15 @@ async function findExistingInstanceForProject(projectDirectory) {
         return null;
     }
 
-    const result = await probeHealth(instance.baseUrl, 2000);
-    if (result.ok) {
-        return instance;
-    }
-
-    return null;
+    // Port is in use — trust the instance even if health probe times out
+    // Map db field names to expected names for compatibility
+    return {
+        baseUrl: instance.base_url,
+        port: instance.port,
+        pid: instance.pid,
+        status: instance.status,
+        startedAt: instance.started_at,
+    };
 }
 
 async function spawnInstanceForProject(projectDirectory) {
@@ -236,8 +217,7 @@ async function spawnInstanceForProject(projectDirectory) {
 
     console.log(`Spawning new OpenCode instance for ${projectDirectory}...`);
 
-    const state = readInstanceState();
-    const port = await allocatePort(state);
+    const port = await allocatePort();
     const baseUrl = `http://127.0.0.1:${port}`;
 
     return new Promise((resolve, reject) => {
@@ -331,14 +311,13 @@ async function spawnInstanceForProject(projectDirectory) {
                     cleanup();
                     resolved = true;
 
-                    state.instances[projectDirectory] = {
-                        port,
+                    upsertInstance({
+                        projectPath: projectDirectory,
                         baseUrl,
-                        status: "ready",
+                        port,
                         pid: child.pid,
-                        startedAt: Date.now(),
-                    };
-                    saveInstanceState(state);
+                        status: "ready",
+                    });
 
                     console.log(`Instance ready: ${projectDirectory} -> ${baseUrl}`);
                     resolve({ baseUrl, pid: child.pid, port });
@@ -355,16 +334,32 @@ async function getOrCreateAttachBaseUrl(rawValue, projectDirectory) {
         return parsed.toString().replace(/\/+$/, "");
     }
 
-    const state = readInstanceState();
-    const instance = findInstanceForDirectory(state, projectDirectory);
+    const instance = await getInstance(projectDirectory);
 
-    if (instance && instance.baseUrl && instance.status === "ready") {
-        const result = await probeHealth(instance.baseUrl, 2000);
-        if (result.ok) {
-            console.log(`Found matching instance for ${projectDirectory}: ${instance.baseUrl}`);
-            return instance.baseUrl;
+    if (instance && instance.base_url && instance.status === "ready") {
+        const inUse = await isPortInUse(instance.port);
+        if (inUse) {
+            let pidAlive = false;
+            if (typeof instance.pid === "number") {
+                try { process.kill(instance.pid, 0); pidAlive = true; } catch { pidAlive = false; }
+            }
+            if (pidAlive) {
+                const health = await probeHealth(instance.base_url, 2000);
+                if (health.ok) {
+                    console.log(`Found matching instance for ${projectDirectory}: ${instance.base_url}`);
+                    return instance.base_url;
+                }
+                console.log(`Instance found but unhealthy (${health.reason}), killing stale PID...`);
+                try { process.kill(instance.pid, "SIGTERM"); } catch {}
+                await new Promise((r) => setTimeout(r, 1000));
+                try { process.kill(instance.pid, "SIGKILL"); } catch {}
+            } else {
+                console.log(`Instance found but PID ${instance.pid} is dead — will spawn new`);
+            }
+            await deleteInstance(projectDirectory);
+        } else {
+            console.log(`Instance found but port not in use — will spawn new`);
         }
-        console.log(`Instance found but not healthy, spawning new one...`);
     }
 
     console.log(`No matching instance found for ${projectDirectory}`);
@@ -373,6 +368,22 @@ async function getOrCreateAttachBaseUrl(rawValue, projectDirectory) {
 }
 
 async function createSessionForCurrentDirectory(baseUrl, projectDirectory) {
+    // Wait for the HTTP server to actually be ready (not just port bound)
+    const deadline = Date.now() + 30_000;
+    let serverReady = false;
+    while (Date.now() < deadline) {
+        try {
+            const res = await fetch(`${baseUrl}/global/health`, {
+                signal: AbortSignal.timeout(2000),
+            });
+            if (res.ok) { serverReady = true; break; }
+        } catch {}
+        await new Promise((r) => setTimeout(r, 500));
+    }
+    if (!serverReady) {
+        throw new Error(`OpenCode server at ${baseUrl} did not respond to /global/health within 30s`);
+    }
+    console.log(`[attach] Server ready. Creating session...`);
     const response = await fetch(`${baseUrl}/session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -401,7 +412,7 @@ function spawnChild(command, args, options) {
     return spawn(command, args, {
         stdio: "inherit",
         env: process.env,
-        cwd: packageRoot,
+        cwd: repoRoot,
         ...options,
     });
 }
@@ -415,33 +426,25 @@ function waitForChildExit(child) {
     });
 }
 
-async function runManagedMode() {
-    console.log("Starting Telegram bot with multi-instance mode...");
-    console.log("Each project will get its own OpenCode server instance.");
+// ── Shared child-process runner ───────────────────────────────────────────────
 
-    delete process.env.OPENCODE_BASE_URL;
-    delete process.env.OPENCODE_URL;
+function spawnBot() {
+    const botEntry = path.resolve(repoRoot, "packages", "bot", "src", "index.js");
+    return spawnChild(process.execPath, [botEntry]);
+}
 
-    const bot = spawnChild(process.execPath, [path.resolve(packageRoot, "bot.js")]);
-
-    const children = [
-        { name: "Telegram bot", process: bot },
-    ];
-
+async function runWithChildren(children, label) {
     let shutdownStarted = false;
 
     const shutdown = (reason) => {
         if (shutdownStarted) return;
         shutdownStarted = true;
-
         console.log(`Shutting down (${reason})...`);
-
         for (const child of children) {
             if (!hasChildExited(child.process)) {
                 child.process.kill("SIGTERM");
             }
         }
-
         setTimeout(() => {
             for (const child of children) {
                 if (!hasChildExited(child.process)) {
@@ -454,9 +457,8 @@ async function runManagedMode() {
     process.on("SIGINT", () => shutdown("SIGINT"));
     process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-    return await new Promise((resolve) => {
+    return new Promise((resolve) => {
         let resolved = false;
-
         const finish = (code) => {
             if (resolved) return;
             resolved = true;
@@ -472,12 +474,11 @@ async function runManagedMode() {
 
             child.process.once("exit", (code, signal) => {
                 if (shutdownStarted) {
-                    if (children.every((entry) => hasChildExited(entry.process))) {
+                    if (children.every((c) => hasChildExited(c.process))) {
                         finish(typeof code === "number" ? code : 0);
                     }
                     return;
                 }
-
                 console.error(`${child.name} exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"})`);
                 shutdown(`${child.name} exited`);
                 finish(typeof code === "number" ? code : 1);
@@ -486,21 +487,112 @@ async function runManagedMode() {
     });
 }
 
+// ── Mode: bot only ─────────────────────────────────────────────────────────────
+
+async function runBotMode() {
+    console.log("Starting Telegram bot...");
+    const bot = spawnBot();
+    return await runWithChildren([{ name: "Telegram bot", process: bot }], "bot");
+}
+
+// ── Mode: interactive CLI REPL ─────────────────────────────────────────────────
+
+async function runCLIMode() {
+    console.log("OpenCode CLI REPL");
+    console.log("Type 'send <prompt>' to send a prompt, 'projects' to list projects, 'exit' to quit.");
+    console.log("(REPL mode — for advanced use. Telegram bot is recommended for most workflows.)\n");
+
+    const readline = await import("node:readline");
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        prompt: "opencode> ",
+    });
+
+    rl.prompt();
+
+    rl.on("line", async (line) => {
+        const cmd = line.trim();
+        if (!cmd) {
+            rl.prompt();
+            return;
+        }
+
+        if (cmd === "exit" || cmd === "quit") {
+            rl.close();
+            return;
+        }
+
+        if (cmd.startsWith("send ")) {
+            const prompt = cmd.slice(5).trim();
+            if (!prompt) {
+                console.log("Usage: send <prompt>");
+            } else {
+                await sendPromptCommand(prompt, undefined).catch((err) =>
+                    console.error(`Error: ${err?.message ?? err}`)
+                );
+            }
+        } else if (cmd === "projects") {
+            await listProjects();
+        } else {
+            console.log(`Unknown command: ${cmd}`);
+            console.log("Available: send <prompt>, projects, exit");
+        }
+
+        rl.prompt();
+    });
+
+    return new Promise(() => {}); // Keep running until user quits
+}
+
+// ── Mode: bot + CLI together ───────────────────────────────────────────────────
+
+async function runAllMode() {
+    console.log("Starting Telegram bot + CLI...");
+    console.log("Each project will get its own OpenCode server instance.");
+
+    delete process.env.OPENCODE_BASE_URL;
+    delete process.env.OPENCODE_URL;
+
+    const bot = spawnBot();
+    const children = [{ name: "Telegram bot", process: bot }];
+
+    return await runWithChildren(children, "all");
+}
+
+// Legacy alias
+const runManagedMode = runAllMode;
+
 async function runAttachMode(rawBaseUrl) {
     const projectDirectory = path.resolve(process.env.INIT_CWD || process.env.PWD || process.cwd());
-    const baseUrl = await getOrCreateAttachBaseUrl(rawBaseUrl, projectDirectory);
+
+    let baseUrl;
+    try {
+        baseUrl = await getOrCreateAttachBaseUrl(rawBaseUrl, projectDirectory);
+    } catch (err) {
+        console.error(`Failed to get/create instance: ${err.message}`);
+        return 1;
+    }
 
     console.log(`Creating session for ${projectDirectory}`);
     console.log(`Using OpenCode server ${baseUrl}`);
 
-    const sessionId = await createSessionForCurrentDirectory(baseUrl, projectDirectory);
+    let sessionId;
+    try {
+        sessionId = await createSessionForCurrentDirectory(baseUrl, projectDirectory);
+    } catch (err) {
+        console.error(`Failed to create session: ${err.message}`);
+        return 1;
+    }
     console.log(`Created session ${sessionId}`);
 
+    console.log(`[attach] Spawning: opencode attach --session ${sessionId} --dir ${projectDirectory} ${baseUrl}`);
     const child = spawn("opencode", ["attach", "--session", sessionId, "--dir", projectDirectory, baseUrl], {
         stdio: "inherit",
         env: process.env,
         cwd: projectDirectory,
     });
+    child.on("error", (err) => console.error(`[attach] spawn error: ${err.message}`));
 
     const { code, signal } = await waitForChildExit(child);
     if (typeof code === "number") {
@@ -527,12 +619,10 @@ async function runKillAll() {
     });
 
     try {
-        if (existsSync(INSTANCES_STATE_FILE)) {
-            unlinkSync(INSTANCES_STATE_FILE);
-            console.log("Removed instance state file.");
-        }
+        clearAllInstances();
+        console.log("Cleared all instances from database.");
     } catch (err) {
-        console.warn("Failed to remove state file:", err?.message);
+        console.warn("Failed to clear instances:", err?.message);
     }
 
     console.log("Done. All OpenCode server instances have been terminated.");
@@ -540,6 +630,16 @@ async function runKillAll() {
 }
 
 const command = process.argv[2];
+const args = process.argv.slice(3);
+
+// Parse global --project <path> flag (used by send, stop, mode)
+function parseProjectFlag(argList) {
+    const idx = argList.findIndex((a) => a === "--project");
+    if (idx >= 0 && argList[idx + 1] !== undefined) {
+        return { projectPath: argList[idx + 1], remaining: argList.filter((_, i) => i !== idx && i !== idx + 1) };
+    }
+    return { projectPath: undefined, remaining: argList };
+}
 
 if (command === "dev" || !command) {
     if (!process.env.TELEGRAM_TOKEN) {
@@ -568,5 +668,133 @@ if (command === "kill-all") {
     process.exit(exitCode);
 }
 
-const exitCode = await runManagedMode();
+// ── New subcommands ───────────────────────────────────────────────────────────
+if (command === "projects") {
+    const sub = args[0];
+    if (sub === "list" || !sub) {
+        await listProjects();
+    } else {
+        console.error(`Unknown 'projects' subcommand: ${sub}`);
+        console.error("Usage: opencode-telegram projects list");
+        process.exit(1);
+    }
+    process.exit(0);
+}
+
+if (command === "project") {
+    const sub = args[0];
+    const subArgs = args.slice(1);
+
+    if (sub === "start") {
+        await projectStartCommand(subArgs[0]);
+    } else if (sub === "stop") {
+        await projectStopCommand(subArgs[0]);
+    } else if (sub === "list") {
+        await projectListCommand();
+    } else {
+        console.error("Usage: opencode-telegram project start|stop|list <project-path>");
+        process.exit(1);
+    }
+    process.exit(0);
+}
+
+if (command === "session" || command === "sessions") {
+    const sub = args[0];
+    const subArgs = args.slice(1);
+    const { projectPath, remaining } = parseProjectFlag(subArgs);
+
+    if (sub === "list") {
+        await listSessionsCommand(projectPath ?? remaining[0]);
+    } else if (sub === "switch") {
+        await switchSessionCommand(remaining[0], remaining[1]);
+    } else if (sub === "new") {
+        await newSessionCommand(projectPath ?? remaining[0]);
+    } else {
+        console.error("Usage: opencode-telegram session list|switch|new [--project <path>]");
+        process.exit(1);
+    }
+    process.exit(0);
+}
+
+if (command === "send") {
+    const { projectPath, remaining } = parseProjectFlag(args);
+    await sendPromptCommand(remaining.join(" "), projectPath);
+    process.exit(0);
+}
+
+if (command === "stop") {
+    const { projectPath } = parseProjectFlag(args);
+    await stopCommand(projectPath);
+    process.exit(0);
+}
+
+if (command === "status") {
+    await statusCommand();
+    process.exit(0);
+}
+
+if (command === "logs") {
+    const { projectPath, remaining } = parseProjectFlag(args);
+    const linesArg = remaining.find((a) => a.startsWith("--lines="));
+    const lines = linesArg ? parseInt(linesArg.split("=")[1], 10) : 100;
+    await logsCommand(projectPath, { lines });
+    process.exit(0);
+}
+
+if (command === "watch") {
+    const { projectPath, remaining } = parseProjectFlag(args);
+    const intervalArg = remaining.find((a) => a.startsWith("--interval="));
+    const interval = intervalArg ? parseInt(intervalArg.split("=")[1], 10) : 2000;
+    await watchCommand(projectPath, { interval });
+    process.exit(0);
+}
+
+if (command === "mode") {
+    const { projectPath, remaining } = parseProjectFlag(args);
+    await setModeCommand(remaining[0], projectPath);
+    process.exit(0);
+}
+
+if (command === "help") {
+    helpCommand();
+    process.exit(0);
+}
+
+// ── start bot | start cli | start all ────────────────────────────────────────
+if (command === "start") {
+    const target = args[0];
+    if (target === "bot") {
+        process.exit(await runBotMode());
+    } else if (target === "cli") {
+        process.exit(await runCLIMode());
+    } else if (target === "all" || !target) {
+        process.exit(await runAllMode());
+    } else {
+        console.error(`Unknown start target: ${target}`);
+        console.error("Usage: opencode-telegram start [bot|cli|all]");
+        process.exit(1);
+    }
+}
+
+// ── serve: HTTP API server for cloudflared tunneling ───────────────────────
+if (command === "serve") {
+    const port = parseInt(args.find((a) => a.startsWith("--port="))?.split("=")[1] ?? "4097", 10);
+    const watch = args.includes("--watch");
+    startServer(port, { watch });
+    // Keep the process alive — prevent Node from exiting when stdin closes
+    process.stdin.resume();
+    await new Promise(() => {});
+}
+
+// ── Convenience shortcuts: opencode-telegram bot | opencode-telegram cli ──────
+if (command === "bot") {
+    process.exit(await runBotMode());
+}
+
+if (command === "cli") {
+    process.exit(await runCLIMode());
+}
+
+// ── Default: start all ────────────────────────────────────────────────────────
+const exitCode = await runAllMode();
 process.exit(exitCode);

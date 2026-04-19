@@ -1,75 +1,196 @@
-# OpenCode Telegram Bot
+# OpenCode Telegram
 
-## Local CLI (recommended)
+Control OpenCode on your Mac via Telegram or CLI. Each project gets its own isolated OpenCode server instance.
 
-Install dependencies:
+## Requirements
 
-```bash
-npm install
-```
+- Node.js 20+
+- [pnpm](https://pnpm.io/installation)
+- `opencode` CLI installed on the machine (`brew install opencode-ai/opencode/opencode` or from [opencode.ai](https://opencode.ai))
+- A Telegram bot token from [@BotFather](https://t.me/BotFather)
 
-Run with npx from this folder:
+## Setup
 
-```bash
-npx --yes .
-```
-
-`npm run start`, `npx --yes .`, and `opencode-telegram` now start:
-- OpenCode server (`opencode-ai serve`) on `0.0.0.0:62771`
-- Telegram bot process using `OPENCODE_BASE_URL=http://127.0.0.1:62771` by default
-
-Run the same managed setup explicitly in dev mode:
+### 1. Clone the repo
 
 ```bash
-opencode-telegram dev
+git clone git@github.com:Ptopic/Opencode-telegram-bot.git
+cd Opencode-telegram-bot
 ```
 
-Or without global link:
+### 2. Install dependencies
 
 ```bash
-npx --yes . dev
+pnpm install
 ```
 
-`opencode-telegram dev` uses the same default server host and port.
+### 3. Configure environment
 
-Optional dev env vars:
-- `OPENCODE_DEV_PORT` (default `62771`)
-- `OPENCODE_DEV_HOST` (default `0.0.0.0`)
+Create a `.env` file at the repo root:
 
-Or link globally for a stable command:
+```bash
+cp .env.example .env
+```
+
+Edit it and set your Telegram bot token:
+
+```
+TELEGRAM_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+```
+
+### 4. Configure project roots (optional)
+
+The CLI needs to know where your projects live. Copy the example config:
+
+```bash
+cp .opencode-telegram.example.json ~/.opencode-telegram.json
+```
+
+Edit `~/.opencode-telegram.json` to match your setup:
+
+```json
+{
+  "projectRoots": [
+    {
+      "scope": "petar",
+      "path": "/Users/petartopic/Desktop/Petar",
+      "label": "Petar"
+    },
+    {
+      "scope": "profico",
+      "path": "/Users/petartopic/Desktop/Profico",
+      "label": "Profico"
+    }
+  ]
+}
+```
+
+If you skip this step, defaults will be used (Petar and Profico desktop folders).
+
+### 5. Link the CLI (optional, for global access)
 
 ```bash
 npm link
+```
+
+This makes `opencode-telegram` available globally as a command.
+
+## Usage
+
+### Start everything (bot + CLI)
+
+```bash
+pnpm start
+# or with npm link:
 opencode-telegram
 ```
 
-Create and attach a session from your current project directory (no path argument needed):
+This starts the Telegram bot. Each project gets its own OpenCode server instance on ports 50000–59999.
+
+### Start bot only
 
 ```bash
-opencode-telegram attach http://localhost:62771
+pnpm start -- --bot
+# or after npm link:
+opencode-telegram bot
 ```
 
-If URL is omitted, it defaults to `OPENCODE_BASE_URL`/`OPENCODE_URL` or `http://127.0.0.1:62771`.
-
-The CLI loads `.env` from the current folder, parent folder, or repository root.
-
-Required env var:
-
-- `TELEGRAM_TOKEN`
-
-Optional:
-
-- `OPENCODE_TELEGRAM_ENV_FILE` (custom env file path)
-- `OPENCODE_BASE_URL` (shared OpenCode server URL, default `http://127.0.0.1:62771` for the managed local server)
-- `OPENCODE_URL` (legacy alias for `OPENCODE_BASE_URL`)
-
-## Docker fallback (optional)
-
-From repository root:
+### Start CLI REPL only
 
 ```bash
-docker compose up --build
+pnpm start -- --cli
+# or after npm link:
+opencode-telegram cli
 ```
 
-If you use Docker instead of the managed local startup, start OpenCode separately and point the bot to it using `OPENCODE_BASE_URL`.
-This repo's compose stack runs OpenCode on port `62771`.
+### Get help
+
+```bash
+opencode-telegram help
+```
+
+## CLI Commands
+
+```bash
+# Projects
+opencode-telegram projects list         # List all projects and running status
+
+# Sessions
+opencode-telegram session list <path>   # List sessions for a project
+opencode-telegram session new <path>    # Create a new session
+opencode-telegram session switch <path> <id>   # Switch to a session
+
+# Interact
+opencode-telegram send "prompt" --project <path>   # Send a prompt, print reply
+opencode-telegram stop --project <path>             # Abort current execution
+
+# Agent mode
+opencode-telegram mode list --project <path>       # List available modes
+opencode-telegram mode agent --project <path>       # Set mode
+
+# Status & logs
+opencode-telegram status              # Show all running instances
+opencode-telegram logs <path>         # Tail logs for a project
+
+# Lifecycle
+opencode-telegram kill-all            # Stop all OpenCode server instances
+```
+
+Run `opencode-telegram help` to see all commands.
+
+## Shell Completions
+
+### Bash
+
+```bash
+source /path/to/packages/cli/completions/bash
+```
+
+Add to `.bashrc` for permanence:
+```bash
+echo 'source /path/to/Opencode-telegram-bot/packages/cli/completions/bash' >> ~/.bashrc
+```
+
+### Zsh
+
+Add to `.zshrc`:
+```bash
+fpath=(/path/to/Opencode-telegram-bot/packages/cli/completions $fpath) && compinit
+```
+
+## Architecture
+
+Each project on your Mac gets its own OpenCode server instance managed by the bot:
+
+- **Port range**: 50000–59999 (one port per project)
+- **State file**: `~/.opencode-telegram-instances.json` (instance URLs, PIDs, ports)
+- **Config file**: `~/.opencode-telegram.json` (project root directories)
+- **No auth**: runs on localhost only
+
+## Packages
+
+| Package | Description |
+|---------|-------------|
+| `packages/bot` | Telegram bot (node-telegram-bot-api) |
+| `packages/cli` | CLI entry point (`opencode-telegram` command) |
+| `packages/skill` | OpenClaw agent skill (for AI control via OpenClaw) |
+
+## Monorepo Structure
+
+```
+opencode-telegram/
+├── packages/
+│   ├── bot/
+│   │   └── src/index.js       # Telegram bot
+│   ├── cli/
+│   │   ├── src/
+│   │   │   ├── index.js        # CLI entry point
+│   │   │   ├── api-client.js   # OpenCode HTTP API client
+│   │   │   ├── config.js       # Config file loader
+│   │   │   └── commands/       # Subcommands
+│   │   └── completions/        # bash + zsh completions
+│   └── skill/
+│       └── SKILL.md           # OpenClaw agent instructions
+├── package.json
+└── pnpm-workspace.yaml
+```
