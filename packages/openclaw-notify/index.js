@@ -1,4 +1,4 @@
-export default async ({ project, client, $, directory }) => {
+export const NotificationPlugin = async ({ project, client, $, directory }) => {
   return {
     event: async ({ event }) => {
       if (event.type === "session.idle" && event.sessionId) {
