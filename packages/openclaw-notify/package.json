@@ -1,9 +1,9 @@
 {
-  "name": "@opencode-telegram/openclaw-notify",
+  "name": "@ptopic/openclaw-notify",
   "version": "1.0.0",
   "type": "module",
   "description": "OpenCode plugin that notifies OpenClaw via webhook when sessions complete",
-  "main": "index.js",
+  "main": "notification-plugin.js",
   "keywords": ["opencode", "openclaw", "notify", "webhook"],
   "homepage": "https://github.com/Ptopic/Opencode-telegram-bot"
 }
