@@ -19,6 +19,9 @@ import { logsCommand } from "./commands/logs.js";
 import { watchCommand } from "./commands/watch.js";
 import { startServer } from "./server.js";
 import { projectStartCommand, projectStopCommand, projectListCommand } from "./commands/project.js";
+import { codeIndexCommand } from "./commands/code-index.js";
+import { codeSearchCommand } from "./commands/code-search.js";
+import { codeStatusCommand } from "./commands/code-status.js";
 import { helpCommand } from "./commands/help.js";
 import { clearAllInstances, getInstance, listInstances, deleteInstance, upsertInstance } from "./db.js";
 
@@ -752,6 +755,29 @@ if (command === "watch") {
 if (command === "mode") {
     const { projectPath, remaining } = parseProjectFlag(args);
     await setModeCommand(remaining[0], projectPath);
+    process.exit(0);
+}
+
+if (command === "code-index") {
+    const watch = args.includes("--watch");
+    const remaining = args.filter((a) => a !== "--watch");
+    const projectPath = remaining[0];
+    await codeIndexCommand(projectPath, { watch });
+    process.exit(0);
+}
+
+if (command === "code-search") {
+    const { projectPath, remaining } = parseProjectFlag(args);
+    const limitArg = remaining.find((a) => a.startsWith("--limit="));
+    const limit = limitArg ? parseInt(limitArg.split("=")[1], 10) : 10;
+    const queryArgs = remaining.filter((a) => !a.startsWith("--limit="));
+    await codeSearchCommand(queryArgs.join(" "), { projectPath, limit });
+    process.exit(0);
+}
+
+if (command === "code-status") {
+    const { projectPath } = parseProjectFlag(args);
+    await codeStatusCommand({ projectPath });
     process.exit(0);
 }
 
