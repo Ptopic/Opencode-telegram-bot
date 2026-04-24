@@ -23,7 +23,8 @@ import { codeIndexCommand } from "./commands/code-index.js";
 import { codeSearchCommand } from "./commands/code-search.js";
 import { codeStatusCommand } from "./commands/code-status.js";
 import { helpCommand } from "./commands/help.js";
-import { clearAllInstances, getInstance, listInstances, deleteInstance, upsertInstance } from "./db.js";
+import { getProjectRoots } from "./config.js";
+import { clearAllInstances, getInstance, listInstances, deleteInstance, upsertInstance, upsertProject } from "./db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -568,6 +569,15 @@ const runManagedMode = runAllMode;
 
 async function runAttachMode(rawBaseUrl) {
     const projectDirectory = path.resolve(process.env.INIT_CWD || process.env.PWD || process.cwd());
+
+    const projectRoots = getProjectRoots();
+    const matchedRoot = projectRoots
+        .filter(root => projectDirectory.startsWith(root.path) || projectDirectory === root.path)
+        .sort((a, b) => b.path.length - a.path.length)[0];
+
+    if (matchedRoot) {
+        upsertProject({ scope: matchedRoot.scope, path: projectDirectory, label: matchedRoot.label });
+    }
 
     let baseUrl;
     try {
