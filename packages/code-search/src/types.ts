@@ -48,6 +48,7 @@ export interface ProjectStats {
 export interface SearchOptions {
   limit?: number;
   threshold?: number;
+  projectPath?: string;
   filters?: SearchFilters;
 }
 

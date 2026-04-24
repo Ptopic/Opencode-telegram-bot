@@ -21,12 +21,12 @@ export function createSearchRouter(engine: CodeSearchEngine): Router {
 
   router.post('/search', async (req: Request, res: Response) => {
     try {
-      const { query, options } = req.body;
+      const { query, projectPath, options } = req.body;
       if (!query || typeof query !== 'string') {
         res.status(400).json({ error: 'query must be a string' });
         return;
       }
-      const results = await engine.search(query, options);
+      const results = await engine.search(query, { ...options, projectPath });
       res.json({ success: true, results });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';

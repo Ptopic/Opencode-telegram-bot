@@ -402,7 +402,8 @@ export class Database {
   }
 
   async search(queryEmbedding: number[], options?: Partial<SearchOptions>): Promise<SearchResult[]> {
-    return this.searchChunks('', queryEmbedding, options?.limit ?? 10, options?.filters);
+    const projectPath = options?.projectPath ?? '';
+    return this.searchChunks(projectPath, queryEmbedding, options?.limit ?? 10, options?.filters);
   }
 
   async removeByPath(path: string): Promise<void> {
@@ -410,16 +411,20 @@ export class Database {
     await this.chunksTable.delete(`filePath = "${path}"`);
   }
 
-  async getStats(_projectPath?: string): Promise<ProjectStats> {
-    return {
-      projectPath: '',
-      totalChunks: 0,
-      totalFiles: 0,
-      totalLines: 0,
-      lastIndexed: new Date(),
-      languages: {},
-      indexSizeBytes: 0,
-    };
+  async getStats(projectPath?: string): Promise<ProjectStats> {
+    if (!this.chunksTable) throw new Error('Database not initialized');
+    if (!projectPath) {
+      return {
+        projectPath: '',
+        totalChunks: 0,
+        totalFiles: 0,
+        totalLines: 0,
+        lastIndexed: new Date(),
+        languages: {},
+        indexSizeBytes: 0,
+      };
+    }
+    return this.getProjectStats(projectPath);
   }
 
   async close(): Promise<void> {

@@ -149,7 +149,8 @@ export class CodeSearchEngine {
     }
 
     const outgoingRefs: Array<{ node: Node; edge: any }> = [];
-    for (const edge of incomingEdges) {
+    const outgoingEdges = await this.db.getEdgesByNode(nodeId);
+    for (const edge of outgoingEdges) {
       if (edge.kind === 'contains') continue;
       const node = await this.db.getNode(edge.target);
       if (node) outgoingRefs.push({ node, edge });
