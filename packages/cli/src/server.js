@@ -254,7 +254,7 @@ async function handleRequest(req, res) {
             // Check if session appears done: we have messages, and no new messages for MAX_EMPTY_POLLS
             if (emptyPolls >= MAX_EMPTY_POLLS && seenCount > 0) {
               // Session is likely done - emit done and close
-              res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+              res.write(`data: ${JSON.stringify({ type: "done", isFinished: true })}\n\n`);
               clearInterval(interval);
               res.end();
               return;
