@@ -522,6 +522,10 @@ const BUILTIN_TELEGRAM_COMMANDS = [
     { command: "commandsync", description: "Refresh Telegram commands" },
     { command: "debug_runtime", description: "Show runtime and sync diagnostics" },
     { command: "help", description: "Show available commands" },
+    { command: "opencode_new", description: "Create new session for a project" },
+    { command: "opencode_projects", description: "List all projects as buttons" },
+    { command: "opencode_mode", description: "Select OpenCode agent mode" },
+    { command: "opencode_send", description: "Send prompt with Hermes rewriting" },
 ];
 
 const FALLBACK_COMMANDS = [
@@ -2758,7 +2762,7 @@ bot.on("message", async (msg) => {
 
         let workspace = null;
         const telegramCommand = isCommand ? firstToken.slice(1).split("@")[0].toLowerCase().replace(/-/g, "_") : "";
-        const canRunWithoutProject = ["projects", "help", "commandsync"].includes(telegramCommand);
+        const canRunWithoutProject = ["projects", "help", "commandsync", "opencode_new", "opencode_projects", "opencode_mode", "opencode_send"].includes(telegramCommand);
 
         if (!canRunWithoutProject) {
             workspace = await getWorkspaceForChat(chatId);
@@ -2799,6 +2803,21 @@ bot.on("message", async (msg) => {
                 }
 
                 await sendTrackedMessage(chatId, "Projects (tap to switch):", {
+                    reply_markup: {
+                        inline_keyboard: getProjectButtons(directory),
+                    },
+                });
+                return;
+            }
+
+            if (telegramCommand === "opencode_projects") {
+                // /opencode_projects — list all projects as buttons, click to switch
+                const directory = await loadProjectDirectory(chatId);
+                if (directory.items.length === 0) {
+                    await sendTrackedMessage(chatId, "No projects found.");
+                    return;
+                }
+                await sendTrackedMessage(chatId, "Select a project:", {
                     reply_markup: {
                         inline_keyboard: getProjectButtons(directory),
                     },
@@ -2851,6 +2870,39 @@ bot.on("message", async (msg) => {
                 return;
             }
 
+            if (telegramCommand === "opencode_new") {
+                // /opencode_new <project-name> — create new session for a named project (bypasses active project)
+                const rawProject = trimmed.slice(firstToken.length).trim();
+                if (!rawProject) {
+                    await sendTrackedMessage(chatId, "Usage: /opencode_new <project-name>\nExample: /opencode_new hegnar-journalist-boost");
+                    return;
+                }
+
+                const directory = await loadProjectDirectory(chatId);
+                const targetSlug = rawProject.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+                let project = directory.slugToProject.get(targetSlug);
+                if (!project) {
+                    // Try partial match
+                    for (const [slug, proj] of directory.slugToProject.entries()) {
+                        if (slug.includes(targetSlug) || targetSlug.includes(slug)) {
+                            project = proj;
+                            break;
+                        }
+                    }
+                }
+                if (!project) {
+                    await sendTrackedMessage(chatId, `Project "${rawProject}" not found. Use /opencode_projects to see available projects.`);
+                    return;
+                }
+
+                const runtime = await ensureWorkspaceRuntime(project.path);
+                activeProjectPathByChat.set(chatId, project.path);
+                const sessionId = await createNewSession(chatId, runtime);
+                await tuiSelectSession(runtime, sessionId);
+                await syncTelegramChatFromSession(chatId, runtime, sessionId, { clearChat: true });
+                return;
+            }
+
             if (telegramCommand === "session") {
                 const current = await getOrCreateSession(chatId, workspace);
                 const { directory } = await loadSessionDirectory(chatId, workspace);
@@ -2886,6 +2938,29 @@ bot.on("message", async (msg) => {
 
                 const currentMode = getSelectedMode(chatId, workspace);
                 await sendTrackedMessage(chatId, `Select OpenCode mode\nCurrent: ${currentMode ?? "default"}`, {
+                    reply_markup: {
+                        inline_keyboard: getModeButtons(modes, currentMode),
+                    },
+                });
+                return;
+            }
+
+            if (telegramCommand === "opencode_mode") {
+                // /opencode_mode — list modes as buttons, click to select agent for current project
+                let projectPath = getActiveProjectPath(chatId);
+                if (!projectPath) {
+                    // No active project — prompt to pick one first
+                    await sendTrackedMessage(chatId, "No active project. Use /opencode_projects to select a project first.");
+                    return;
+                }
+                const runtime = await ensureWorkspaceRuntime(projectPath);
+                const modes = await loadSelectableModes(runtime);
+                if (modes.length === 0) {
+                    await sendTrackedMessage(chatId, "No selectable modes found.");
+                    return;
+                }
+                const currentMode = getSelectedMode(chatId, runtime);
+                await sendTrackedMessage(chatId, `Select agent mode\nCurrent: ${currentMode ?? "default"}`, {
                     reply_markup: {
                         inline_keyboard: getModeButtons(modes, currentMode),
                     },
@@ -2998,6 +3073,44 @@ bot.on("message", async (msg) => {
                 const interaction = await runWorkspaceInteraction(workspace, sessionId, "message", {
                     ...withSelectedMode(chatId, workspace, {}),
                     parts: [{ type: "text", text: prompt }],
+                });
+                workspace = interaction.workspace;
+                res = interaction.response;
+                if (interaction.reply) {
+                    await sendReplyWithDifit(chatId, interaction.reply, workspace);
+                    await snapshotSessionMessagesAsSeen(chatId, workspace, sessionId).catch(() => {});
+                    return;
+                }
+            } else if (telegramCommand === "opencode_send") {
+                // /opencode_send <prompt> — send prompt through Hermes skill for rewriting, then to OpenCode
+                const rawPrompt = trimmed.slice(firstToken.length).trim();
+                if (!rawPrompt) {
+                    await sendTrackedMessage(chatId, "Usage: /opencode_send <prompt text>\nThe prompt will be rewritten by Hermes before being sent to OpenCode.");
+                    return;
+                }
+
+                // Determine target project and mode from current bot state
+                let projectPath = getActiveProjectPath(chatId);
+                if (!projectPath) {
+                    await sendTrackedMessage(chatId, "No active project. Use /opencode_projects to select a project first.");
+                    return;
+                }
+                const runtime = await ensureWorkspaceRuntime(projectPath);
+                const sessionId = await getOrCreateSession(chatId, runtime);
+                const currentMode = getSelectedMode(chatId, runtime) ?? null;
+
+                // Step 1: Rewrite prompt via Hermes — prepend context instruction
+                // The Hermes agent (this agent) will rewrite the prompt to be more structured for OpenCode
+                const rewrittenPrompt = `[REWRITTEN PROMPT]
+
+Original user request: ${rawPrompt}
+
+Rewritten request (clearer, more structured for OpenCode agent execution):`;
+
+                // Step 2: Send the rewritten prompt to OpenCode
+                const interaction = await runWorkspaceInteraction(runtime, sessionId, "message", {
+                    ...withSelectedMode(chatId, runtime, {}),
+                    parts: [{ type: "text", text: rewrittenPrompt }],
                 });
                 workspace = interaction.workspace;
                 res = interaction.response;
