@@ -575,6 +575,7 @@ async function runAttachMode(rawBaseUrl) {
         baseUrl = await getOrCreateAttachBaseUrl(rawBaseUrl, projectDirectory);
     } catch (err) {
         console.error(`Failed to get/create instance: ${err.message}`);
+        console.error(`[DEBUG] getOrCreateAttachBaseUrl failed before upsertProject could run`);
         return 1;
     }
 
@@ -582,11 +583,16 @@ async function runAttachMode(rawBaseUrl) {
     console.log(`Using OpenCode server ${baseUrl}`);
 
     // Auto-register this project so it appears in /projects
-    upsertProject({
-      scope: projectDirectory,  // Use project path as unique scope/key
-      path: projectDirectory,
-      label: path.basename(projectDirectory) || projectDirectory,
-    });
+    try {
+      upsertProject({
+        scope: projectDirectory,  // Use project path as unique scope/key
+        path: projectDirectory,
+        label: path.basename(projectDirectory) || projectDirectory,
+      });
+      console.log(`[DEBUG] upsertProject called for: ${projectDirectory}`);
+    } catch (err) {
+      console.error(`[DEBUG] upsertProject FAILED: ${err?.message}`);
+    }
 
     let sessionId;
     try {
