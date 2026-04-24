@@ -116,7 +116,20 @@ async function handleRequest(req, res) {
     // ── GET /projects ───────────────────────────────────────────────────────
     if (pathname === "/projects" && method === "GET") {
       const projects = await listProjects();
+      const instances = await listInstances();
       const result = projects.map((p) => ({ type: "root", scope: p.scope, path: p.path, label: p.label }));
+      // Include running instances that aren't already in projectRoots
+      const rootPaths = new Set(result.map((p) => p.path));
+      for (const inst of instances) {
+        if (inst.project_path && !rootPaths.has(inst.project_path)) {
+          result.push({
+            type: "instance",
+            path: inst.project_path,
+            label: inst.project_path.split("/").pop(),
+            status: inst.status,
+          });
+        }
+      }
 
       return jsonResponse(res, 200, { projectRoots: result });
     }
