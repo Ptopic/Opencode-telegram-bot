@@ -522,10 +522,11 @@ const BUILTIN_TELEGRAM_COMMANDS = [
     { command: "commandsync", description: "Refresh Telegram commands" },
     { command: "debug_runtime", description: "Show runtime and sync diagnostics" },
     { command: "help", description: "Show available commands" },
-    { command: "opencode_new", description: "Create new session for a project" },
+    { command: "opencode_new", description: "Create new session for current project" },
     { command: "opencode_projects", description: "List all projects as buttons" },
     { command: "opencode_mode", description: "Select OpenCode agent mode" },
     { command: "opencode_send", description: "Send prompt with Hermes rewriting" },
+    { command: "opencode_status", description: "Show current project, session and mode" },
 ];
 
 const FALLBACK_COMMANDS = [
@@ -2762,7 +2763,7 @@ bot.on("message", async (msg) => {
 
         let workspace = null;
         const telegramCommand = isCommand ? firstToken.slice(1).split("@")[0].toLowerCase().replace(/-/g, "_") : "";
-        const canRunWithoutProject = ["projects", "help", "commandsync", "opencode_new", "opencode_projects", "opencode_mode", "opencode_send"].includes(telegramCommand);
+        const canRunWithoutProject = ["projects", "help", "commandsync", "opencode_new", "opencode_projects", "opencode_mode", "opencode_send", "opencode_status"].includes(telegramCommand);
 
         if (!canRunWithoutProject) {
             workspace = await getWorkspaceForChat(chatId);
@@ -2871,35 +2872,49 @@ bot.on("message", async (msg) => {
             }
 
             if (telegramCommand === "opencode_new") {
-                // /opencode_new <project-name> — create new session for a named project (bypasses active project)
-                const rawProject = trimmed.slice(firstToken.length).trim();
-                if (!rawProject) {
-                    await sendTrackedMessage(chatId, "Usage: /opencode_new <project-name>\nExample: /opencode_new hegnar-journalist-boost");
+                // /opencode_new — create new session for the current active project
+                let projectPath = getActiveProjectPath(chatId);
+                if (!projectPath) {
+                    await sendTrackedMessage(chatId, "No active project. Use /opencode_projects to select a project first.");
                     return;
                 }
 
-                const directory = await loadProjectDirectory(chatId);
-                const targetSlug = rawProject.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-                let project = directory.slugToProject.get(targetSlug);
-                if (!project) {
-                    // Try partial match
-                    for (const [slug, proj] of directory.slugToProject.entries()) {
-                        if (slug.includes(targetSlug) || targetSlug.includes(slug)) {
-                            project = proj;
-                            break;
-                        }
-                    }
-                }
-                if (!project) {
-                    await sendTrackedMessage(chatId, `Project "${rawProject}" not found. Use /opencode_projects to see available projects.`);
-                    return;
-                }
-
-                const runtime = await ensureWorkspaceRuntime(project.path);
-                activeProjectPathByChat.set(chatId, project.path);
+                const runtime = await ensureWorkspaceRuntime(projectPath);
                 const sessionId = await createNewSession(chatId, runtime);
                 await tuiSelectSession(runtime, sessionId);
                 await syncTelegramChatFromSession(chatId, runtime, sessionId, { clearChat: true });
+                return;
+            }
+
+            if (telegramCommand === "opencode_status") {
+                // /opencode_status — show current project, session name, session id, and selected mode
+                let projectPath = getActiveProjectPath(chatId);
+                if (!projectPath) {
+                    await sendTrackedMessage(chatId, "No active project. Use /opencode_projects to select a project first.");
+                    return;
+                }
+
+                const runtime = await ensureWorkspaceRuntime(projectPath);
+                const { directory } = await loadSessionDirectory(chatId, runtime);
+                const sessionKey = getChatProjectKey(chatId, projectPath);
+                const currentSessionId = sessionByChatProject.get(sessionKey);
+                const currentMode = getSelectedMode(chatId, runtime);
+                const projectName = directory?.projectName ?? runtime.projectName ?? "unknown";
+
+                if (!currentSessionId) {
+                    await sendTrackedMessage(
+                        chatId,
+                        `Project: ${projectName}\nSession: none\nMode: ${currentMode ?? "default"}`,
+                    );
+                    return;
+                }
+
+                const sessionName = describeSession(directory, currentSessionId);
+                await sendTrackedMessage(
+                    chatId,
+                    `Project: ${projectName}\nSession: ${sessionName}\nSession ID: \`${currentSessionId}\`\nMode: ${currentMode ?? "default"}`,
+                    { parse_mode: "Markdown" },
+                );
                 return;
             }
 
