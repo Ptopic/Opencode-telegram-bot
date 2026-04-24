@@ -22,6 +22,7 @@ import { projectStartCommand, projectStopCommand, projectListCommand } from "./c
 import { codeIndexCommand } from "./commands/code-index.js";
 import { codeSearchCommand } from "./commands/code-search.js";
 import { codeStatusCommand } from "./commands/code-status.js";
+import { mcpCommand } from "./commands/mcp.js";
 import { helpCommand } from "./commands/help.js";
 import { clearAllInstances, getInstance, listInstances, deleteInstance, upsertInstance } from "./db.js";
 
@@ -778,6 +779,11 @@ if (command === "code-search") {
 if (command === "code-status") {
     const { projectPath } = parseProjectFlag(args);
     await codeStatusCommand({ projectPath });
+    process.exit(0);
+}
+
+if (command === "mcp") {
+    mcpCommand();
     process.exit(0);
 }
 

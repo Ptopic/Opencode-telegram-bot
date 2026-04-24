@@ -460,6 +460,89 @@ async function handleRequest(req, res) {
       }
     }
 
+    // ── Code Search Proxy Routes ────────────────────────────────────────────
+    // Proxy /api/search/* → code-search server at localhost:4098
+
+    if (pathname.startsWith('/api/search/') && method === 'POST') {
+      const codeSearchBody = await parseBody(req);
+      const targetPath = pathname.slice('/api'.length); // /search/index → /api/search/index
+      try {
+        const csRes = await fetch(`http://localhost:4098${targetPath}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(codeSearchBody),
+          signal: AbortSignal.timeout(300_000),
+        });
+        const data = await csRes.json();
+        return jsonResponse(res, csRes.status, data);
+      } catch (err) {
+        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+      }
+    }
+
+    if (pathname === '/api/search/stats' && method === 'GET') {
+      const projectPath = url.searchParams.get('projectPath') ?? '';
+      try {
+        const csRes = await fetch(`http://localhost:4098/api/search/stats?projectPath=${encodeURIComponent(projectPath)}`);
+        const data = await csRes.json();
+        return jsonResponse(res, csRes.status, data);
+      } catch (err) {
+        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+      }
+    }
+
+    if (pathname.startsWith('/api/search/index/') && method === 'DELETE') {
+      const pathToRemove = pathname.slice('/api/search/index/'.length);
+      try {
+        const csRes = await fetch(`http://localhost:4098/api/search/index/${pathToRemove}`, {
+          method: 'DELETE',
+        });
+        const data = await csRes.json();
+        return jsonResponse(res, csRes.status, data);
+      } catch (err) {
+        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+      }
+    }
+
+    if (pathname === '/api/search/watch/start' && method === 'POST') {
+      const codeSearchBody = await parseBody(req);
+      try {
+        const csRes = await fetch('http://localhost:4098/api/search/watch/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(codeSearchBody),
+        });
+        const data = await csRes.json();
+        return jsonResponse(res, csRes.status, data);
+      } catch (err) {
+        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+      }
+    }
+
+    if (pathname === '/api/search/watch/stop' && method === 'POST') {
+      try {
+        const csRes = await fetch('http://localhost:4098/api/search/watch/stop', {
+          method: 'POST',
+        });
+        const data = await csRes.json();
+        return jsonResponse(res, csRes.status, data);
+      } catch (err) {
+        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+      }
+    }
+
+    // Graph routes
+    if (pathname.startsWith('/api/graph/') && method === 'GET') {
+      const targetPath = pathname.slice('/api'.length);
+      try {
+        const csRes = await fetch(`http://localhost:4098${targetPath}${url.search}`);
+        const data = await csRes.json();
+        return jsonResponse(res, csRes.status, data);
+      } catch (err) {
+        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+      }
+    }
+
     // ── 404 ────────────────────────────────────────────────────────────────
     return errorResponse(res, 404, `Unknown route: ${method} ${pathname}`);
 
