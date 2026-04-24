@@ -118,7 +118,7 @@ async function handleRequest(req, res) {
       try {
         const projects = await listProjects();
         const instances = await listInstances();
-        console.error("[DEBUG /projects] projects count:", projects?.length, "instances count:", instances?.length);
+        const _debug = { projectsCount: projects?.length ?? -1, instancesCount: instances?.length ?? -1, instances };
         const result = projects.map((p) => ({ type: "root", scope: p.scope, path: p.path, label: p.label }));
         // Include running instances that aren't already in projectRoots
         const rootPaths = new Set(result.map((p) => p.path));
@@ -133,10 +133,19 @@ async function handleRequest(req, res) {
           }
         }
 
-        return jsonResponse(res, 200, { projectRoots: result });
+        return jsonResponse(res, 200, { projectRoots: result, _debug });
       } catch (err) {
-        console.error("[DEBUG /projects] error:", err?.message);
         return errorResponse(res, 500, "Internal error: " + err?.message);
+      }
+    }
+
+    // ── GET /debug/db ───────────────────────────────────────────────────────
+    if (pathname === "/debug/db" && method === "GET") {
+      try {
+        const instances = await listInstances();
+        return jsonResponse(res, 200, { raw_instances: instances });
+      } catch (err) {
+        return errorResponse(res, 500, "DB error: " + err?.message);
       }
     }
 
