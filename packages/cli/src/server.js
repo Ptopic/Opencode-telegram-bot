@@ -272,7 +272,7 @@ async function handleRequest(req, res) {
           if (messages.length > seenCount) {
             const newMessages = messages.slice(seenCount);
             for (const msg of newMessages) {
-              const data = JSON.stringify({ type: "message", role: getMessageRole(msg), parts: getMessageParts(msg) });
+              const data = JSON.stringify({ type: "message", role: getMessageRole(msg), parts: getMessageParts(msg), ts: msg.ts });
               res.write(`data: ${data}\n\n`);
             }
             seenCount = messages.length;
