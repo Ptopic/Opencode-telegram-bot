@@ -24,7 +24,7 @@ import { codeSearchCommand } from "./commands/code-search.js";
 import { codeStatusCommand } from "./commands/code-status.js";
 import { mcpCommand } from "./commands/mcp.js";
 import { helpCommand } from "./commands/help.js";
-import { clearAllInstances, getInstance, listInstances, deleteInstance, upsertInstance } from "./db.js";
+import { clearAllInstances, getInstance, listInstances, deleteInstance, upsertInstance, upsertProject } from "./db.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -580,6 +580,13 @@ async function runAttachMode(rawBaseUrl) {
 
     console.log(`Creating session for ${projectDirectory}`);
     console.log(`Using OpenCode server ${baseUrl}`);
+
+    // Auto-register this project so it appears in /projects
+    upsertProject({
+      scope: projectDirectory,  // Use project path as unique scope/key
+      path: projectDirectory,
+      label: path.basename(projectDirectory) || projectDirectory,
+    });
 
     let sessionId;
     try {
