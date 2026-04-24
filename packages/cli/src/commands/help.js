@@ -38,6 +38,11 @@ COMMANDS
     mode list [--project <path>]       List available modes
     mode <name> [--project <path>]   Set agent mode
 
+  Code Search
+    code-index <path> [--watch]     Index a project (start server on port 4098 first)
+    code-search <query> [--limit 10]  Search indexed code
+    code-status                       Show index statistics
+
   Lifecycle
     status              Show all running instances and their health
     logs <path>         Tail logs for a project

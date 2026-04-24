@@ -234,6 +234,9 @@ async function handleRequest(req, res) {
       let seenCount = 0;
       const intervalMs = parseInt(url.searchParams.get("interval") ?? "2000", 10);
 
+      let emptyPolls = 0;
+      const MAX_EMPTY_POLLS = 5; // 10 seconds of silence (5 x 2000ms) = session likely done
+
       const interval = setInterval(async () => {
         try {
           const messages = await getSessionMessages(instance.base_url, sessionId);
@@ -245,6 +248,17 @@ async function handleRequest(req, res) {
               res.write(`data: ${data}\n\n`);
             }
             seenCount = messages.length;
+            emptyPolls = 0; // Reset counter when we get new messages
+          } else {
+            emptyPolls++;
+            // Check if session appears done: we have messages, and no new messages for MAX_EMPTY_POLLS
+            if (emptyPolls >= MAX_EMPTY_POLLS && seenCount > 0) {
+              // Session is likely done - emit done and close
+              res.write(`data: ${JSON.stringify({ type: "done" })}\n\n`);
+              clearInterval(interval);
+              res.end();
+              return;
+            }
           }
         } catch (err) {
           const data = JSON.stringify({ type: "error", message: err.message });
