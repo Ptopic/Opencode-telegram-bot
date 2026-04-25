@@ -286,6 +286,10 @@ async function handleRequest(req, res) {
               clearInterval(interval);
               res.end();
               return;
+            } else if (emptyPolls > 0 && emptyPolls < MAX_EMPTY_POLLS) {
+              // Not enough empty polls for isFinished:true yet, but emit a keepalive
+              // done=false so the client knows the stream is still polling
+              res.write(`data: ${JSON.stringify({ type: "done", isFinished: false })}\n\n`);
             }
           }
         } catch (err) {
