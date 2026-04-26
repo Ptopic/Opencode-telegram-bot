@@ -232,6 +232,47 @@ async function handleRequest(req, res) {
       });
     }
 
+    // ── POST /session/:sessionId/message ───────────────────────────────────
+    // Fire-and-forget proxy to workspace runtime for real-time streaming.
+    // Forwards to: POST {workspace_base_url}/session/{sessionId}/message
+    if (pathname.match(/^\/session\/([^/]+)\/message$/) && method === "POST") {
+      const sessionId = pathname.replace(/^\/session\//, "").replace(/\/message$/, "");
+      const body = await parseBody(req);
+
+      // Resolve project from sessionId via query param or active session
+      const projectPath = body.project ?? null;
+      if (!projectPath) {
+        return errorResponse(res, 400, "Missing 'project' in request body");
+      }
+
+      const instance = await getInstance(projectPath);
+      if (!instance || instance.status !== "ready") {
+        return errorResponse(res, 404, "No running instance for this project");
+      }
+
+      // Forward the payload as-is to the workspace runtime
+      const payload = {
+        parts: body.parts ?? [{ type: "text", text: body.text ?? "" }],
+        mode: body.mode ?? null,
+      };
+
+      let workspaceRes;
+      try {
+        const { default: axios } = await import("axios");
+        workspaceRes = await axios.post(
+          `${instance.base_url}/session/${sessionId}/message`,
+          payload,
+          { timeout: 5000 }
+        );
+      } catch (err) {
+        const status = err?.response?.status ?? 500;
+        const msg = err?.response?.data ?? err?.message ?? "Workspace request failed";
+        return errorResponse(res, status, String(msg));
+      }
+
+      return jsonResponse(res, workspaceRes.status, workspaceRes.data ?? { ok: true });
+    }
+
     // ── GET /watch/:project ────────────────────────────────────────────────
     if (pathname.startsWith("/watch/") && method === "GET") {
       const projectPath = decodeURIComponent(pathname.slice("/watch/".length));
