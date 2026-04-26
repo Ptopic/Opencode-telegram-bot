@@ -5,6 +5,7 @@ export const CodeChunkSchema = z.object({
   id: z.string(),
   filePath: z.string(),
   content: z.string(),
+  summary: z.string().optional(),
   startLine: z.number(),
   endLine: z.number(),
   language: z.string(),
@@ -17,6 +18,14 @@ export const CodeChunkSchema = z.object({
 export const SearchOptionsSchema = z.object({
   limit: z.number().min(1).max(100).default(10),
   threshold: z.number().min(0).max(1).default(0.5),
+  graphBoost: z.number().min(0).max(2).default(0.3),
+  useGraph: z.boolean().default(true),
+  useHybrid: z.boolean().default(true),
+  bm25Weight: z.number().min(0).max(1).default(0.3),
+  vectorWeight: z.number().min(0).max(1).default(0.5),
+  graphWeight: z.number().min(0).max(1).default(0.2),
+  useSummaryEmbedding: z.boolean().default(true),
+  summaryWeight: z.number().min(0).max(1).default(0.3),
   filters: z.object({
     language: z.string().optional(),
     filePath: z.string().optional(),
@@ -34,7 +43,7 @@ export const IndexOptionsSchema = z.object({
 export const ChunkingOptionsSchema = z.object({
   maxChunkSize: z.number().min(100).max(10000).default(1000),
   overlap: z.number().min(0).max(500).default(100),
-  strategy: z.enum(['tree-sitter', 'line', 'unigram']).default('tree-sitter'),
+  strategy: z.literal('chonkie').default('chonkie'),
 });
 
 export const ServerConfigSchema = z.object({
@@ -94,9 +103,9 @@ export const DefaultConfig: Config = {
     filters: {},
   },
   chunking: {
-    maxChunkSize: 1000,
-    overlap: 100,
-    strategy: 'tree-sitter',
+    maxChunkSize: 4000,
+    overlap: 200,
+    strategy: 'chonkie',
   },
   server: {
     port: 3000,
@@ -109,8 +118,9 @@ export const DefaultConfig: Config = {
     dependencyGraphTable: 'dependency_graph',
   },
   embedder: {
-    provider: 'voyage',
-    model: 'voyage-code-3',
+    provider: 'openai',
+    model: 'text-embedding-3-large',
+    apiKey: process.env.OPENAI_API_KEY,
   },
   watcher: {
     paths: [],

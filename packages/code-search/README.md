@@ -2,10 +2,27 @@
 
 Semantic code search and RAG tool with vector embeddings, AST-aware chunking, and live file watching.
 
+## Node.js Version Requirement
+
+**Node.js 22+ is required** for full WASM/tree-sitter support. The Chonkiejs AST chunker uses `web-tree-sitter` which requires Node 22's improved WASM handling.
+
+```bash
+# If using nvm:
+nvm install 22
+nvm use 22
+
+# If using fnm:
+fnm install 22
+fnm use 22
+```
+
+Node 25 may cause `getDylinkMetadata` errors when loading tree-sitter WASM grammars.
+
 ## Features
 
-- **Semantic Search**: Embed code chunks using Voyage Code 3 (optimized for code)
-- **AST-Aware Chunking**: Tree-sitter powered code parsing for intelligent chunking
+- **Semantic Search**: Embed code chunks using OpenAI text-embedding-3-large
+- **AST-Aware Chunking**: Chonkiejs (web-tree-sitter WASM) powered code parsing for intelligent chunking
+- **Knowledge Graph**: Symbol extraction for call graph and import relationships
 - **Live Sync**: Chokidar file watching with debounced updates
 - **LanceDB Storage**: Local vector database with upsert support
 - **REST API**: Express.js HTTP API for search and indexing
@@ -14,8 +31,8 @@ Semantic code search and RAG tool with vector embeddings, AST-aware chunking, an
 
 - **TypeScript** + Express.js (HTTP API)
 - **LanceDB** (vector DB, local, supports upserts)
-- **Tree-sitter** (AST-aware code chunking)
-- **Voyage Code 3** (embeddings, best for code)
+- **Chonkiejs** (web-tree-sitter WASM for AST-aware chunking)
+- **OpenAI text-embedding-3-large** (embeddings, 3072 dimensions)
 - **Chokidar** (file watching for live sync)
 
 ## Installation
@@ -103,8 +120,9 @@ src/
 ├── engine.ts         # Core search engine
 ├── config/           # Zod schemas & defaults
 ├── db/               # LanceDB wrapper
-├── chunker/          # Tree-sitter / line chunking
-├── embedder/         # Voyage AI embeddings
+├── chunker/          # Chonkie / line chunking
+├── embedder/         # OpenAI embeddings
+├── graph/            # Symbol extraction for knowledge graph
 ├── watcher/          # Chokidar file watcher
 └── api/              # Express routes & server
 ```
@@ -121,17 +139,16 @@ src/
 
 ## Chunking Strategies
 
-### Tree-sitter (default)
-AST-aware chunking using Tree-sitter parsers:
+### Chonkie (default, only)
+AST-aware chunking using Chonkiejs with web-tree-sitter WASM:
 - JavaScript/TypeScript
 - Python
 - Go
 - Rust
+- Java
 - C/C++
-- JSON
 
-### Line-based
-Simple line-based chunking with overlap as fallback.
+No fallback - if chunking fails, indexing fails.
 
 ## API Reference
 

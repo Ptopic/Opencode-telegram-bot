@@ -40,7 +40,8 @@ export type EdgeKind =
   | 'returns'
   | 'instantiates'
   | 'overrides'
-  | 'decorates';
+  | 'decorates'
+  | 'uses_type';
 
 export type Language =
   | 'typescript'

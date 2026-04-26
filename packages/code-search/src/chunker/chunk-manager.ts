@@ -1,23 +1,26 @@
-import type { CodeChunk, ChunkingOptions } from '../types.js';
+import type { CodeChunk } from '../types.js';
 import type { Database } from '../db/database.js';
-import { v4 as uuid } from 'uuid';
 import { TreeSitterExtractor } from '../graph/tree-sitter-extractor.js';
+import { ChonkieExtractor } from './chonkie-chunker.js';
+import { IgnoreManager } from '../util/ignore-manager.js';
 
 interface ChunkManagerConfig {
   maxChunkSize: number;
   overlap: number;
-  strategy: 'tree-sitter' | 'line' | 'unigram';
+  strategy: 'chonkie';
 }
 
 export class ChunkManager {
   private config: ChunkManagerConfig;
   private db?: Database;
-  private extractor: TreeSitterExtractor;
+  private treeSitterExtractor: TreeSitterExtractor;
+  private chonkieExtractor: ChonkieExtractor;
 
   constructor(config: ChunkManagerConfig, db?: Database) {
     this.config = config;
     this.db = db;
-    this.extractor = new TreeSitterExtractor();
+    this.treeSitterExtractor = new TreeSitterExtractor();
+    this.chonkieExtractor = new ChonkieExtractor();
   }
 
   async chunkFile(filePath: string): Promise<CodeChunk[]> {
@@ -26,11 +29,7 @@ export class ChunkManager {
     const ext = filePath.substring(filePath.lastIndexOf('.'));
     const language = this.getLanguage(ext);
 
-    if (this.config.strategy === 'tree-sitter') {
-      return this.chunkWithTreeSitter(content, filePath, language);
-    }
-
-    return this.chunkByLines(content, filePath, language);
+    return this.chunkWithChonkie(content, filePath, language);
   }
 
   async chunkDirectory(paths: string[], options?: { ignorePatterns?: string[]; projectPath?: string }): Promise<CodeChunk[]> {
@@ -38,8 +37,12 @@ export class ChunkManager {
     const { readdirSync, statSync } = await import('fs');
     const { join, extname } = await import('path');
     const allChunks: CodeChunk[] = [];
-    const ignoreSet = new Set(options?.ignorePatterns ?? ['node_modules', '.git', 'dist', 'build']);
     const extensions = new Set(['.ts', '.js', '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.json']);
+
+    const ignoreManager = await IgnoreManager.fromDirectory(this.currentProjectPath);
+    if (options?.ignorePatterns) {
+      ignoreManager.addPatterns(options.ignorePatterns);
+    }
 
     const scanDir = async (dir: string): Promise<string[]> => {
       const files: string[] = [];
@@ -47,7 +50,7 @@ export class ChunkManager {
         const entries = readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
           const fullPath = join(dir, entry.name);
-          if (ignoreSet.has(entry.name)) continue;
+          if (ignoreManager.isIgnored(fullPath)) continue;
           if (entry.isDirectory()) {
             files.push(...(await scanDir(fullPath)));
           } else if (entry.isFile() && extensions.has(extname(entry.name))) {
@@ -78,56 +81,15 @@ export class ChunkManager {
     return allChunks;
   }
 
-  private chunkByLines(content: string, filePath: string, language: string): CodeChunk[] {
-    const lines = content.split('\n');
-    const chunks: CodeChunk[] = [];
-    let currentPos = 0;
-    let currentLine = 1;
+  private async chunkWithChonkie(content: string, filePath: string, language: string): Promise<CodeChunk[]> {
+    const { nodes, edges } = await this.treeSitterExtractor.extractSymbols(filePath, content, language);
 
-    while (currentLine <= lines.length) {
-      const chunkLines: string[] = [];
-      let charCount = 0;
-      const startLine = currentLine;
-
-      while (charCount < this.config.maxChunkSize && currentLine <= lines.length) {
-        const line = lines[currentLine - 1] ?? '';
-        chunkLines.push(line);
-        charCount += line.length + 1;
-        currentLine++;
-      }
-
-      const content = chunkLines.join('\n');
-      chunks.push({
-        id: uuid(),
-        filePath,
-        content,
-        startLine: startLine,
-        endLine: currentLine - 1,
-        language,
-        chunkType: 'file',
-        metadata: {},
-      });
-
-      currentLine -= Math.floor(this.config.overlap / 80);
-      if (currentLine <= startLine) currentLine = startLine + 1;
+    if (nodes.length > 0 && this.db) {
+      await this.db.upsertNodes(nodes, this.currentProjectPath);
+      await this.db.upsertEdges(edges, this.currentProjectPath);
     }
 
-    return chunks;
-  }
-
-  private async chunkWithTreeSitter(content: string, filePath: string, language: string): Promise<CodeChunk[]> {
-    try {
-      const { nodes, edges } = await this.extractor.extractGraph(filePath);
-
-      if (nodes.length > 0 && this.db) {
-        await this.db.upsertNodes(nodes, this.currentProjectPath);
-        await this.db.upsertEdges(edges, this.currentProjectPath);
-      }
-    } catch (error) {
-      console.error(`Error extracting graph from ${filePath}:`, error);
-    }
-
-    return this.chunkByLines(content, filePath, language);
+    return this.chonkieExtractor.chunkFile(content, filePath);
   }
 
   private currentProjectPath: string = '';
