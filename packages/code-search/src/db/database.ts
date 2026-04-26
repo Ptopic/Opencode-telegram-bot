@@ -73,76 +73,104 @@ export class Database {
     const tableNames = await this.db.tableNames();
     const existingTables = new Set(tableNames);
 
-    if (!existingTables.has(this.codeChunksTable)) {
-      const schema = new Schema([
-        new Field('id', new Utf8()),
-        new Field('projectPath', new Utf8()),
-        new Field('filePath', new Utf8()),
-        new Field('content', new Utf8()),
-        new Field('summary', new Utf8(), true),
-        new Field('startLine', new Int32()),
-        new Field('endLine', new Int32()),
-        new Field('language', new Utf8()),
-        new Field('chunkType', new Utf8()),
-        new Field('fqn', new Utf8(), true),
-        new Field('parentId', new Utf8(), true),
-        new Field('metadata', new Utf8()),
-        new Field('vector', new FixedSizeList(EMBEDDING_DIMENSIONS, new Field('', new Float32()))),
-        new Field('summaryVectorJson', new Utf8(), true),
-      ]);
-      this.chunksTable = await this.db.createEmptyTable(this.codeChunksTable, schema);
-    } else {
-      this.chunksTable = await this.db.openTable(this.codeChunksTable);
+    const chunksSchema = new Schema([
+      new Field('id', new Utf8()),
+      new Field('projectPath', new Utf8()),
+      new Field('filePath', new Utf8()),
+      new Field('content', new Utf8()),
+      new Field('summary', new Utf8(), true),
+      new Field('startLine', new Int32()),
+      new Field('endLine', new Int32()),
+      new Field('language', new Utf8()),
+      new Field('chunkType', new Utf8()),
+      new Field('fqn', new Utf8(), true),
+      new Field('parentId', new Utf8(), true),
+      new Field('metadata', new Utf8()),
+      new Field('vector', new FixedSizeList(EMBEDDING_DIMENSIONS, new Field('', new Float32()))),
+      new Field('summaryVectorJson', new Utf8(), true),
+    ]);
+
+    const graphSchema = new Schema([
+      new Field('sourceId', new Utf8()),
+      new Field('targetId', new Utf8()),
+      new Field('sourceFile', new Utf8()),
+      new Field('targetFile', new Utf8()),
+      new Field('projectPath', new Utf8()),
+      new Field('importName', new Utf8(), true),
+      new Field('line', new Int32(), true),
+    ]);
+
+    const nodesSchema = new Schema([
+      new Field('id', new Utf8()),
+      new Field('kind', new Utf8()),
+      new Field('name', new Utf8()),
+      new Field('qualifiedName', new Utf8()),
+      new Field('filePath', new Utf8()),
+      new Field('language', new Utf8()),
+      new Field('startLine', new Int32()),
+      new Field('endLine', new Int32()),
+      new Field('startColumn', new Int32()),
+      new Field('endColumn', new Int32()),
+      new Field('isExported', new Bool()),
+      new Field('projectPath', new Utf8()),
+      new Field('metadata', new Utf8()),
+    ]);
+
+    const edgesSchema = new Schema([
+      new Field('source', new Utf8()),
+      new Field('target', new Utf8()),
+      new Field('kind', new Utf8()),
+      new Field('projectPath', new Utf8()),
+      new Field('metadata', new Utf8()),
+      new Field('line', new Int32(), true),
+    ]);
+
+    try {
+      if (!existingTables.has(this.codeChunksTable)) {
+        this.chunksTable = await this.db.createEmptyTable(this.codeChunksTable, chunksSchema);
+      } else {
+        this.chunksTable = await this.db.openTable(this.codeChunksTable);
+      }
+    } catch (err) {
+      console.warn('[Database] code_chunks table corrupted, recreating:', err instanceof Error ? err.message : err);
+      try { await this.db.dropTable(this.codeChunksTable); } catch {}
+      this.chunksTable = await this.db.createEmptyTable(this.codeChunksTable, chunksSchema);
     }
 
-    if (!existingTables.has(this.dependencyGraphTable)) {
-      const schema = new Schema([
-        new Field('sourceId', new Utf8()),
-        new Field('targetId', new Utf8()),
-        new Field('sourceFile', new Utf8()),
-        new Field('targetFile', new Utf8()),
-        new Field('projectPath', new Utf8()),
-        new Field('importName', new Utf8(), true),
-        new Field('line', new Int32(), true),
-      ]);
-      this.graphTable = await this.db.createEmptyTable(this.dependencyGraphTable, schema);
-    } else {
-      this.graphTable = await this.db.openTable(this.dependencyGraphTable);
+    try {
+      if (!existingTables.has(this.dependencyGraphTable)) {
+        this.graphTable = await this.db.createEmptyTable(this.dependencyGraphTable, graphSchema);
+      } else {
+        this.graphTable = await this.db.openTable(this.dependencyGraphTable);
+      }
+    } catch (err) {
+      console.warn('[Database] dependency_graph table corrupted, recreating');
+      try { await this.db.dropTable(this.dependencyGraphTable); } catch {}
+      this.graphTable = await this.db.createEmptyTable(this.dependencyGraphTable, graphSchema);
     }
 
-    if (!existingTables.has(this.graphNodesTable)) {
-      const schema = new Schema([
-        new Field('id', new Utf8()),
-        new Field('kind', new Utf8()),
-        new Field('name', new Utf8()),
-        new Field('qualifiedName', new Utf8()),
-        new Field('filePath', new Utf8()),
-        new Field('language', new Utf8()),
-        new Field('startLine', new Int32()),
-        new Field('endLine', new Int32()),
-        new Field('startColumn', new Int32()),
-        new Field('endColumn', new Int32()),
-        new Field('isExported', new Bool()),
-        new Field('projectPath', new Utf8()),
-        new Field('metadata', new Utf8()),
-      ]);
-      this.nodesTable = await this.db.createEmptyTable(this.graphNodesTable, schema);
-    } else {
-      this.nodesTable = await this.db.openTable(this.graphNodesTable);
+    try {
+      if (!existingTables.has(this.graphNodesTable)) {
+        this.nodesTable = await this.db.createEmptyTable(this.graphNodesTable, nodesSchema);
+      } else {
+        this.nodesTable = await this.db.openTable(this.graphNodesTable);
+      }
+    } catch (err) {
+      console.warn('[Database] graph_nodes table corrupted, recreating');
+      try { await this.db.dropTable(this.graphNodesTable); } catch {}
+      this.nodesTable = await this.db.createEmptyTable(this.graphNodesTable, nodesSchema);
     }
 
-    if (!existingTables.has(this.graphEdgesTable)) {
-      const schema = new Schema([
-        new Field('source', new Utf8()),
-        new Field('target', new Utf8()),
-        new Field('kind', new Utf8()),
-        new Field('projectPath', new Utf8()),
-        new Field('metadata', new Utf8()),
-        new Field('line', new Int32(), true),
-      ]);
-      this.edgesTable = await this.db.createEmptyTable(this.graphEdgesTable, schema);
-    } else {
-      this.edgesTable = await this.db.openTable(this.graphEdgesTable);
+    try {
+      if (!existingTables.has(this.graphEdgesTable)) {
+        this.edgesTable = await this.db.createEmptyTable(this.graphEdgesTable, edgesSchema);
+      } else {
+        this.edgesTable = await this.db.openTable(this.graphEdgesTable);
+      }
+    } catch (err) {
+      console.warn('[Database] graph_edges table corrupted, recreating');
+      try { await this.db.dropTable(this.graphEdgesTable); } catch {}
+      this.edgesTable = await this.db.createEmptyTable(this.graphEdgesTable, edgesSchema);
     }
   }
 
