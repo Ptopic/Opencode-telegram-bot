@@ -303,6 +303,158 @@ async function handleRequest(req, res) {
       return;
     }
 
+    // ── GET /watch-native/:project ─────────────────────────────────────────
+    // Proxies OpenCode's native /event SSE stream, mapping session.idle
+    // to our {type:"done",isFinished:true} format so clients know when
+    // the session is truly finished (vs the polling-based /watch/:project
+    // which can premature-close when OpenCode adds follow-up user messages).
+    if (pathname.startsWith("/watch-native/") && method === "GET") {
+      const projectPath = decodeURIComponent(pathname.slice("/watch-native/".length));
+      const instance = await getInstance(projectPath);
+
+      if (!instance || instance.status !== "ready") {
+        return errorResponse(res, 404, "No running instance for this project");
+      }
+
+      const sessionData = (await getActiveSession(projectPath)) ?? {};
+      const sessionId =
+        url.searchParams.get("session") ??
+        sessionData.sessionId ??
+        (await listSessions(instance.base_url)).pop()?.id;
+
+      if (!sessionId) {
+        return errorResponse(res, 404, "No session found");
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      });
+
+      let finished = false;
+
+      const sessionFilter = (event) => {
+        // Match events for our session — sessionID may be at top level or nested
+        const eventSessionId =
+          event?.sessionID ??
+          event?.sessionId ??
+          event?.session?.id ??
+          event?.info?.sessionID ??
+          null;
+        return String(eventSessionId) === String(sessionId);
+      };
+
+      const parseSseFrame = (raw) => {
+        const lines = raw.split("\n");
+        const dataLines = [];
+        for (const line of lines) {
+          if (line.startsWith("data:")) {
+            dataLines.push(line.slice(5).trimStart());
+          }
+        }
+        const rawPayload = dataLines.join("\n").trim();
+        if (!rawPayload || rawPayload === "[DONE]") return null;
+        try {
+          return JSON.parse(rawPayload);
+        } catch {
+          return null;
+        }
+      };
+
+      let buffer = "";
+
+      const stream = new ReadableStream({
+        async start(controller) {
+          let retryDelay = 1000;
+          const maxRetryDelay = 10000;
+
+          const fetchEvents = async () => {
+            try {
+              const sseRes = await fetch(`${instance.base_url}/global/event`, {
+                headers: { Accept: "text/event-stream" },
+              });
+
+              if (!sseRes.ok || !sseRes.body) {
+                throw new Error(`Event stream unavailable (${sseRes.status})`);
+              }
+
+              retryDelay = 1000;
+              const reader = sseRes.body.getReader();
+              const decoder = new TextDecoder();
+
+              while (!finished) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+                const frames = buffer.split("\n\n");
+                buffer = frames.pop() ?? "";
+
+                for (const frame of frames) {
+                  if (finished) break;
+                  const event = parseSseFrame(frame);
+                  if (!event) continue;
+
+                  // Forward message events as-is so Hermes receives the same format
+                  // as /watch/:project (role + parts) plus any other event types
+                  const eventType = typeof event.type === "string" ? event.type : "";
+
+                  if (eventType === "session.idle" && sessionFilter(event)) {
+                    if (!finished) {
+                      finished = true;
+                      const data = JSON.stringify({ type: "done", isFinished: true });
+                      res.write(`data: ${data}\n\n`);
+                      res.end();
+                      controller.close();
+                      return;
+                    }
+                  }
+
+                  // Forward all events as message events so Hermes gets them
+                  const data = JSON.stringify({ type: eventType || "event", payload: event });
+                  res.write(`data: ${data}\n\n`);
+                }
+              }
+            } catch (err) {
+              if (finished) return;
+              console.warn("Native event stream error, retrying in", retryDelay, err.message);
+              const data = JSON.stringify({ type: "error", message: `stream error: ${err.message}, retrying...` });
+              res.write(`data: ${data}\n\n`);
+              await new Promise((r) => setTimeout(r, retryDelay));
+              retryDelay = Math.min(retryDelay * 2, maxRetryDelay);
+              if (!finished) fetchEvents();
+            }
+          };
+
+          fetchEvents();
+        },
+
+        cancel() {
+          finished = true;
+        },
+      });
+
+      // Pipe the readable stream to the response
+      stream.pipeTo(
+        new WritableStream({
+          write(chunk) {
+            if (!res.writableEnded) res.write(chunk);
+          },
+          close() {
+            if (!res.writableEnded) res.end();
+          },
+        })
+      );
+
+      req.on("close", () => {
+        finished = true;
+      });
+
+      return;
+    }
+
     // ── RAW SSE DEBUG ──────────────────────────────────────────────────────
     if (pathname === "/debug/raw-sse" && method === "GET") {
       const sessionId = url.searchParams.get("session");
