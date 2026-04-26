@@ -2,7 +2,8 @@ import { Database } from './db/database.js';
 import { ChunkManager } from './chunker/chunk-manager.js';
 import { Embedder } from './embedder/embedder.js';
 import { FileWatcher } from './watcher/file-watcher.js';
-import type { SearchOptions, IndexOptions, ProjectStats, SearchResult } from './types.js';
+import { ChunkSummarizer } from './summarizer/summarizer.js';
+import type { SearchOptions, IndexOptions, ProjectStats, SearchResult, CodeChunk } from './types.js';
 import type { Node, Context } from './graph/types.js';
 import { DefaultConfig, type Config } from './config/index.js';
 
@@ -10,6 +11,7 @@ export class CodeSearchEngine {
   private db: Database;
   private chunker: ChunkManager;
   private embedder: Embedder;
+  private summarizer: ChunkSummarizer;
   private watcher: FileWatcher | null = null;
   private config: Config;
   private currentProjectPath: string = '';
@@ -24,13 +26,17 @@ export class CodeSearchEngine {
     this.chunker = new ChunkManager({
       maxChunkSize: this.config.chunking.maxChunkSize ?? 1000,
       overlap: this.config.chunking.overlap ?? 100,
-      strategy: this.config.chunking.strategy ?? 'line',
+      strategy: this.config.chunking.strategy ?? 'chonkie',
     }, this.db);
     this.embedder = new Embedder({
       provider: this.config.embedder.provider,
       model: this.config.embedder.model,
       apiKey: this.config.embedder.apiKey,
       baseUrl: this.config.embedder.baseUrl,
+    });
+    this.summarizer = new ChunkSummarizer({
+      provider: 'openai',
+      apiKey: this.config.embedder.apiKey,
     });
   }
 
@@ -42,14 +48,67 @@ export class CodeSearchEngine {
     this.currentProjectPath = paths[0] ?? '';
     const chunks = await this.chunker.chunkDirectory(paths, { ...options, projectPath: this.currentProjectPath });
     const embeddings = await this.embedder.embedChunks(chunks);
-    await this.db.upsertChunks(chunks, embeddings, this.currentProjectPath);
+
+    console.log('[CodeSearchEngine] Generating chunk summaries...');
+    const summaries = await this.summarizer.summarizeChunks(
+      chunks.map(c => ({ content: c.content, filePath: c.filePath }))
+    );
+
+    const chunksWithSummaries: CodeChunk[] = chunks.map((chunk, i) => ({
+      ...chunk,
+      summary: summaries[i] || undefined,
+    }));
+
+    console.log('[CodeSearchEngine] Generating summary embeddings...');
+    const summaryEmbeddings = await this.embedder.embedChunks(chunksWithSummaries.map(c => ({
+      ...c,
+      content: c.summary ?? c.content,
+    })));
+
+    await this.db.upsertChunks(chunksWithSummaries, embeddings, this.currentProjectPath, summaryEmbeddings);
     return this.getStats();
   }
 
   async search(query: string, options?: Partial<SearchOptions>): Promise<SearchResult[]> {
+    const useGraph = options?.useGraph ?? true;
+    const useHybrid = options?.useHybrid ?? true;
+    const useSummaryEmbedding = options?.useSummaryEmbedding ?? true;
+    const graphBoost = options?.graphBoost ?? 0.3;
+    const summaryWeight = options?.summaryWeight ?? 0.3;
+
     const queryEmbedding = await this.embedder.embedQuery(query);
+
+    if (useSummaryEmbedding && useHybrid) {
+      return this.db.searchHybridWithSummary(query, queryEmbedding, queryEmbedding, {
+        ...options,
+        projectPath: this.currentProjectPath,
+        graphBoost,
+        summaryWeight,
+      });
+    }
+
+    if (useHybrid) {
+      return this.db.searchHybrid(query, queryEmbedding, {
+        ...options,
+        projectPath: this.currentProjectPath,
+        graphBoost,
+      });
+    }
+
+    if (useGraph) {
+      return this.db.searchWithGraphBoost(queryEmbedding, {
+        ...options,
+        projectPath: this.currentProjectPath,
+        graphBoost,
+      });
+    }
+
     const results = await this.db.search(queryEmbedding, options);
     return results;
+  }
+
+  async searchWithGraph(query: string, options?: Partial<SearchOptions & { graphBoost?: number }>): Promise<SearchResult[]> {
+    return this.search(query, { ...options, useGraph: true, useHybrid: false });
   }
 
   async removePath(path: string): Promise<void> {

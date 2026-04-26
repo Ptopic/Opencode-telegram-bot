@@ -4,6 +4,7 @@ export interface CodeChunk {
   id: string;
   filePath: string;
   content: string;
+  summary?: string;
   startLine: number;
   endLine: number;
   language: string;
@@ -50,6 +51,14 @@ export interface SearchOptions {
   threshold?: number;
   projectPath?: string;
   filters?: SearchFilters;
+  useGraph?: boolean;
+  useHybrid?: boolean;
+  graphBoost?: number;
+  bm25Weight?: number;
+  vectorWeight?: number;
+  graphWeight?: number;
+  useSummaryEmbedding?: boolean;
+  summaryWeight?: number;
 }
 
 export interface SearchFilters {
@@ -68,7 +77,7 @@ export interface IndexOptions {
 export interface ChunkingOptions {
   maxChunkSize?: number;
   overlap?: number;
-  strategy?: 'tree-sitter' | 'line' | 'unigram';
+  strategy?: 'chonkie';
 }
 
 export interface EmbedderConfig {
@@ -98,5 +107,5 @@ export interface ServerConfig {
   cors?: boolean;
 }
 
-export const EMBEDDING_DIMENSIONS = 1536 as const;
+export const EMBEDDING_DIMENSIONS = 3072 as const;
 export type EmbeddingDimensions = 1536;

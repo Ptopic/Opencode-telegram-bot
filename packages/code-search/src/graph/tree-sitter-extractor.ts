@@ -1,392 +1,358 @@
-import type { Tree, SyntaxNode } from 'tree-sitter';
-import type { Node, Edge, NodeKind, EdgeKind } from './types.js';
+import { CodeChunker, type Chunk } from '@chonkiejs/core';
+import { v4 as uuid } from 'uuid';
+import type { Node, Edge, Language as GraphLanguage } from './types.js';
 
-type Language = 'typescript' | 'javascript' | 'python' | 'go' | 'rust';
-
-interface ExtractorConfig {
-  includeImports?: boolean;
-  includeCalls?: boolean;
-}
-
-interface SymbolDefinition {
-  node: SyntaxNode;
+interface ExtractedSymbol {
+  id: string;
+  kind: string;
   name: string;
   qualifiedName: string;
-  kind: NodeKind;
   startLine: number;
   endLine: number;
   isExported: boolean;
-  classContext?: string;
+  filePath: string;
+  language: string;
 }
 
-const SYMBOL_NODE_TYPES: Record<string, NodeKind> = {
-  function_declaration: 'function',
-  method_definition: 'method',
-  function: 'function',
-  arrow_function: 'function',
-  class_declaration: 'class',
-  class: 'class',
-  interface_declaration: 'interface',
-  type_declaration: 'type_alias',
-  enum_declaration: 'enum',
-  struct_declaration: 'struct',
-  variable_declarator: 'variable',
-  constant_declarator: 'constant',
-  module_declaration: 'module',
-  import_statement: 'import',
-  import_clause: 'import',
+interface ExtractedReference {
+  sourceId: string;
+  targetName: string;
+  kind: string;
+  line: number;
+}
+
+const LANGUAGE_MAP: Record<string, string> = {
+  '.ts': 'typescript',
+  '.tsx': 'typescript',
+  '.js': 'javascript',
+  '.jsx': 'javascript',
+  '.py': 'python',
+  '.go': 'go',
+  '.rs': 'rust',
+  '.java': 'java',
+  '.c': 'c',
+  '.cpp': 'cpp',
 };
 
-let parserCache: Map<string, any> = new Map();
-
-async function getParser(language: Language): Promise<any> {
-  if (parserCache.has(language)) {
-    return parserCache.get(language)!;
-  }
-
-  const Parser = (await import('tree-sitter')).default;
-  const parser = new Parser();
-
-  let languageModule: any;
-  switch (language) {
-    case 'typescript':
-    case 'javascript':
-      try {
-        const ts = await import('tree-sitter-typescript');
-        languageModule = ts.typescript ?? ts;
-      } catch {
-        const js = await import('tree-sitter-javascript');
-        languageModule = js;
-      }
-      break;
-    case 'python':
-      languageModule = await import('tree-sitter-python');
-      break;
-    case 'go':
-      languageModule = await import('tree-sitter-go');
-      break;
-    case 'rust':
-      languageModule = await import('tree-sitter-rust');
-      break;
-    default:
-      throw new Error(`Unsupported language: ${language}`);
-  }
-
-  parser.setLanguage(languageModule);
-  parserCache.set(language, parser);
-  return parser;
-}
-
-function getLanguageFromFilePath(filePath: string): Language {
-  const ext = filePath.substring(filePath.lastIndexOf('.')).toLowerCase();
-  const map: Record<string, Language> = {
-    '.ts': 'typescript',
-    '.tsx': 'typescript',
-    '.js': 'javascript',
-    '.jsx': 'javascript',
-    '.py': 'python',
-    '.go': 'go',
-    '.rs': 'rust',
-  };
-  return map[ext] ?? 'javascript';
-}
-
-function getNodeText(node: SyntaxNode, content: string): string {
-  return content.slice(node.startIndex, node.endIndex);
-}
-
-function getSymbolKind(nodeType: string): NodeKind | null {
-  return SYMBOL_NODE_TYPES[nodeType] ?? null;
-}
-
-function isExported(node: SyntaxNode): boolean {
-  const parent = node.parent;
-  if (!parent) return false;
-  if (parent.type === 'export_clause') return true;
-  if (parent.type === 'export_statement') return true;
-  if (parent.type === 'declaration') return isExported(parent);
-  return false;
-}
-
-function extractSymbolName(node: SyntaxNode, nodeType: string): string {
-  switch (nodeType) {
-    case 'function_declaration':
-    case 'function':
-    case 'class_declaration':
-    case 'interface_declaration':
-    case 'type_declaration':
-    case 'enum_declaration':
-    case 'struct_declaration': {
-      const nameChild = node.childForFieldName('name');
-      return nameChild?.text ?? '';
-    }
-    case 'method_definition': {
-      const nameChild = node.childForFieldName('name');
-      return nameChild?.text ?? '';
-    }
-    case 'variable_declarator':
-    case 'constant_declarator': {
-      const nameChild = node.childForFieldName('name');
-      return nameChild?.text ?? '';
-    }
-    case 'module_declaration': {
-      const nameChild = node.childForFieldName('name');
-      return nameChild?.text ?? 'module';
-    }
-    default:
-      return '';
-  }
-}
-
-function buildQualifiedName(name: string, classContext?: string): string {
-  if (classContext) {
-    return `${classContext}::${name}`;
-  }
-  return name;
-}
-
-function generateNodeId(filePath: string, kind: NodeKind, name: string, startLine: number): string {
-  return `file:${filePath}::${kind}::${name}::${startLine}`;
-}
-
-function traverseForSymbols(
-  node: SyntaxNode,
-  content: string,
-  classContext?: string
-): SymbolDefinition[] {
-  const symbols: SymbolDefinition[] = [];
-  const nodeType = node.type;
-  const kind = getSymbolKind(nodeType);
-  let symbolName: string | undefined;
-
-  if (kind && kind !== 'import') {
-    symbolName = extractSymbolName(node, nodeType);
-    if (symbolName && !symbolName.startsWith('_')) {
-      const qualifiedName = buildQualifiedName(symbolName, classContext);
-      symbols.push({
-        node,
-        name: symbolName,
-        qualifiedName,
-        kind,
-        startLine: node.startPosition.row + 1,
-        endLine: node.endPosition.row + 1,
-        isExported: isExported(node),
-        classContext,
-      });
-
-      if (kind === 'class') {
-        const body = node.childForFieldName('body') ?? node.childForFieldName('declaration');
-        if (body) {
-          for (const child of body.children) {
-            if (child.type === 'method_definition' || child.type === 'function_declaration') {
-              const methodName = extractSymbolName(child, child.type);
-              if (methodName) {
-                symbols.push({
-                  node: child,
-                  name: methodName,
-                  qualifiedName: buildQualifiedName(methodName, symbolName),
-                  kind: child.type === 'method_definition' ? 'method' : 'function',
-                  startLine: child.startPosition.row + 1,
-                  endLine: child.endPosition.row + 1,
-                  isExported: isExported(child),
-                  classContext: symbolName,
-                });
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-
-  const childContext = kind === 'class' ? symbolName : classContext;
-  for (const child of node.children) {
-    if (child.type !== 'import_statement' && child.type !== 'export_statement') {
-      symbols.push(...traverseForSymbols(child, content, childContext));
-    }
-  }
-
-  return symbols;
-}
-
-function extractCallEdges(
-  nodes: SymbolDefinition[],
-  tree: Tree,
-  content: string,
-  language: Language
-): Edge[] {
-  const edges: Edge[] = [];
-
-  const rootNode = tree.rootNode;
-
-  function findCalls(node: SyntaxNode): void {
-    if (node.type === 'call_expression') {
-      const funcNode = node.childForFieldName('function');
-      if (funcNode?.type === 'identifier') {
-        const funcName = funcNode.text;
-        const line = node.startPosition.row + 1;
-
-        for (const sym of nodes) {
-          if (sym.name === funcName && sym.startLine <= line && sym.endLine >= line) {
-            edges.push({
-              source: sym.qualifiedName,
-              target: funcName,
-              kind: 'calls',
-              line,
-            });
-            break;
-          }
-        }
-      }
-    }
-
-    for (const child of node.children) {
-      findCalls(child);
-    }
-  }
-
-  findCalls(rootNode);
-  return edges;
-}
-
-function extractImportEdges(
-  nodes: SymbolDefinition[],
-  tree: Tree,
-  content: string
-): Edge[] {
-  const edges: Edge[] = [];
-  const rootNode = tree.rootNode;
-
-  function findImports(node: SyntaxNode): void {
-    if (node.type === 'import_statement' || node.type === 'import_clause') {
-      const line = node.startPosition.row + 1;
-      for (const sym of nodes) {
-        if (sym.kind === 'function' && sym.startLine <= line && sym.endLine >= line) {
-          const specifiers: string[] = [];
-          node.children.forEach(child => {
-            if (child.type === 'import_specifier') {
-              const nameChild = child.childForFieldName('name');
-              if (nameChild) specifiers.push(nameChild.text);
-            }
-          });
-
-          for (const spec of specifiers) {
-            edges.push({
-              source: sym.qualifiedName,
-              target: spec,
-              kind: 'imports',
-              line,
-            });
-          }
-        }
-      }
-    }
-
-    for (const child of node.children) {
-      findImports(child);
-    }
-  }
-
-  findImports(rootNode);
-  return edges;
-}
-
 export class TreeSitterExtractor {
-  private config: ExtractorConfig;
+  private chunkers: Map<string, CodeChunker> = new Map();
+  private initialized: boolean = false;
 
-  constructor(config: ExtractorConfig = {}) {
-    this.config = config;
-  }
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
 
-  async parseFile(filePath: string): Promise<Tree> {
-    const language = getLanguageFromFilePath(filePath);
-    const parser = await getParser(language);
+    const languages = ['javascript', 'typescript', 'python', 'go', 'rust', 'java', 'c', 'cpp'];
 
-    const { readFile } = await import('fs/promises');
-    const content = await readFile(filePath, 'utf-8');
-
-    return parser.parse(content);
-  }
-
-  extractSymbols(filePath: string, tree: Tree, language: string): Node[] {
-    const rootNode = tree.rootNode;
-    const content = getNodeText(rootNode, '');
-    const lang = language as Language;
-
-    const definitions = traverseForSymbols(rootNode, content);
-    const uniqueSymbols = new Map<string, SymbolDefinition>();
-
-    for (const def of definitions) {
-      if (!uniqueSymbols.has(def.qualifiedName)) {
-        uniqueSymbols.set(def.qualifiedName, def);
-      }
-    }
-
-    const nodes: Node[] = [];
-    for (const [, def] of uniqueSymbols) {
-      nodes.push({
-        id: generateNodeId(filePath, def.kind, def.name, def.startLine),
-        qualifiedName: def.qualifiedName,
-        kind: def.kind,
-        filePath,
-        name: def.name,
-        startLine: def.startLine,
-        endLine: def.endLine,
-        startColumn: def.node.startPosition.column,
-        endColumn: def.node.endPosition.column,
-        isExported: def.isExported,
+    for (const lang of languages) {
+      const chunker = await CodeChunker.create({
         language: lang,
-        updatedAt: Date.now(),
+        chunkSize: 2048,
       });
+      this.chunkers.set(lang, chunker);
     }
 
-    return nodes;
+    this.initialized = true;
   }
 
-  extractEdges(nodes: Node[], tree: Tree, language: string): Edge[] {
-    const lang = language as Language;
-    const content = getNodeText(tree.rootNode, '');
+  async extractSymbols(filePath: string, content: string, language: string): Promise<{ nodes: Node[]; edges: Edge[] }> {
+    await this.initialize();
 
-    const symbolDefs: SymbolDefinition[] = nodes.map(n => ({
-      node: tree.rootNode,
-      name: n.name,
-      qualifiedName: n.qualifiedName,
-      kind: n.kind,
-      startLine: n.startLine,
-      endLine: n.endLine,
-      isExported: n.isExported ?? false,
+    const lang = LANGUAGE_MAP[filePath.substring(filePath.lastIndexOf('.'))] ?? 'typescript';
+    const chunker = this.chunkers.get(lang);
+
+    if (!chunker) {
+      throw new Error(`No chunker available for language: ${language}`);
+    }
+
+    const chunks: Chunk[] = chunker.chunk(content);
+
+    const symbols: ExtractedSymbol[] = [];
+    const references: ExtractedReference[] = [];
+
+    for (const chunk of chunks) {
+      const startLine = content.substring(0, chunk.startIndex).split('\n').length;
+      const endLine = content.substring(0, chunk.endIndex).split('\n').length;
+
+      const chunkSymbols = this.extractFromChunk(chunk.text, startLine, lang, filePath);
+      symbols.push(...chunkSymbols);
+    }
+
+    for (const chunk of chunks) {
+      const startLine = content.substring(0, chunk.startIndex).split('\n').length;
+      const chunkRefs = this.extractReferencesFromChunk(chunk.text, startLine, symbols);
+      references.push(...chunkRefs);
+    }
+
+    const nodes: Node[] = symbols.map(s => ({
+      id: s.id,
+      kind: s.kind as Node['kind'],
+      name: s.name,
+      qualifiedName: s.qualifiedName,
+      filePath: s.filePath,
+      language: s.language as GraphLanguage,
+      startLine: s.startLine,
+      endLine: s.endLine,
+      startColumn: 0,
+      endColumn: 0,
+      isExported: s.isExported,
+      updatedAt: Date.now(),
     }));
 
     const edges: Edge[] = [];
+    for (const ref of references) {
+      const sourceSymbol = symbols.find(s => s.id === ref.sourceId);
+      if (!sourceSymbol) continue;
 
-    if (this.config.includeCalls !== false) {
-      edges.push(...extractCallEdges(symbolDefs, tree, content, lang));
+      const targetSymbol = this.findSymbolByName(ref.targetName, symbols);
+      if (targetSymbol && targetSymbol.id !== ref.sourceId) {
+        edges.push({
+          source: ref.sourceId,
+          target: targetSymbol.id,
+          kind: ref.kind as Edge['kind'],
+          line: ref.line,
+          metadata: {},
+        });
+      }
     }
-
-    if (this.config.includeImports !== false) {
-      edges.push(...extractImportEdges(symbolDefs, tree, content));
-    }
-
-    return edges;
-  }
-
-  async extractGraph(filePath: string): Promise<{ nodes: Node[]; edges: Edge[] }> {
-    const tree = await this.parseFile(filePath);
-    const language = getLanguageFromFilePath(filePath);
-    const nodes = this.extractSymbols(filePath, tree, language);
-    const nodeIdMap = new Map<string, string>();
-    nodes.forEach(n => nodeIdMap.set(n.qualifiedName, n.id));
-
-    const rawEdges = this.extractEdges(nodes, tree, language);
-    const edges: Edge[] = rawEdges.map(e => ({
-      source: nodeIdMap.get(e.source) ?? e.source,
-      target: nodeIdMap.get(e.target) ?? e.target,
-      kind: e.kind,
-      line: e.line,
-    }));
 
     return { nodes, edges };
   }
-}
 
-export const defaultExtractor = new TreeSitterExtractor();
+  private extractFromChunk(chunkText: string, baseLine: number, language: string, filePath: string): ExtractedSymbol[] {
+    const symbols: ExtractedSymbol[] = [];
+    const lines = chunkText.split('\n');
+
+    let classScope: string | null = null;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line) continue;
+      const lineNum = baseLine + i;
+
+      const classMatch = line.match(/^\s*(?:export\s+)?class\s+(\w+)/);
+      if (classMatch?.[1]) {
+        const name = classMatch[1];
+        symbols.push({
+          id: uuid(),
+          kind: 'class',
+          name,
+          qualifiedName: name,
+          startLine: lineNum,
+          endLine: lineNum,
+          isExported: line.includes('export'),
+          filePath,
+          language,
+        });
+        classScope = name;
+        continue;
+      }
+
+      if (classScope && line.trim().startsWith('}')) {
+        classScope = null;
+      }
+
+      const functionMatch = line.match(/^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)/);
+      if (functionMatch?.[1]) {
+        const name = functionMatch[1];
+        const qualifiedName = classScope ? `${classScope}.${name}` : name;
+        symbols.push({
+          id: uuid(),
+          kind: 'function',
+          name,
+          qualifiedName,
+          startLine: lineNum,
+          endLine: lineNum,
+          isExported: line.includes('export'),
+          filePath,
+          language,
+        });
+        continue;
+      }
+
+      const arrowFunctionMatch = line.match(/^\s*(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>/);
+      if (arrowFunctionMatch?.[1]) {
+        const name = arrowFunctionMatch[1];
+        const qualifiedName = classScope ? `${classScope}.${name}` : name;
+        symbols.push({
+          id: uuid(),
+          kind: 'function',
+          name,
+          qualifiedName,
+          startLine: lineNum,
+          endLine: lineNum,
+          isExported: line.includes('export'),
+          filePath,
+          language,
+        });
+        continue;
+      }
+
+      const methodMatch = line.match(/^\s*(?:readonly\s+)?(\w+)\s*\([^)]*\)\s*\{/);
+      if (methodMatch?.[1] && classScope) {
+        const name = methodMatch[1];
+        if (!['if', 'else', 'for', 'while', 'switch', 'catch'].includes(name)) {
+          const qualifiedName = `${classScope}.${name}`;
+          symbols.push({
+            id: uuid(),
+            kind: 'method',
+            name,
+            qualifiedName,
+            startLine: lineNum,
+            endLine: lineNum,
+            isExported: false,
+            filePath,
+            language,
+          });
+        }
+        continue;
+      }
+
+      const interfaceMatch = line.match(/^\s*(?:export\s+)?interface\s+(\w+)/);
+      if (interfaceMatch?.[1]) {
+        const name = interfaceMatch[1];
+        symbols.push({
+          id: uuid(),
+          kind: 'interface',
+          name,
+          qualifiedName: name,
+          startLine: lineNum,
+          endLine: lineNum,
+          isExported: line.includes('export'),
+          filePath,
+          language,
+        });
+        continue;
+      }
+
+      const typeMatch = line.match(/^\s*(?:export\s+)?type\s+(\w+)/);
+      if (typeMatch?.[1]) {
+        const name = typeMatch[1];
+        symbols.push({
+          id: uuid(),
+          kind: 'type_alias',
+          name,
+          qualifiedName: name,
+          startLine: lineNum,
+          endLine: lineNum,
+          isExported: line.includes('export'),
+          filePath,
+          language,
+        });
+        continue;
+      }
+
+      const enumMatch = line.match(/^\s*(?:export\s+)?enum\s+(\w+)/);
+      if (enumMatch?.[1]) {
+        const name = enumMatch[1];
+        symbols.push({
+          id: uuid(),
+          kind: 'enum',
+          name,
+          qualifiedName: name,
+          startLine: lineNum,
+          endLine: lineNum,
+          isExported: line.includes('export'),
+          filePath,
+          language,
+        });
+        continue;
+      }
+
+      const importMatch = line.match(/^\s*import\s+(?:{[^}]+}|\w+)\s+from\s+['"](.+?)['"]/);
+      if (importMatch?.[1]) {
+        const name = importMatch[1];
+        symbols.push({
+          id: uuid(),
+          kind: 'import',
+          name,
+          qualifiedName: name,
+          startLine: lineNum,
+          endLine: lineNum,
+          isExported: false,
+          filePath,
+          language,
+        });
+        continue;
+      }
+    }
+
+    return symbols;
+  }
+
+  private extractReferencesFromChunk(chunkText: string, baseLine: number, symbols: ExtractedSymbol[]): ExtractedReference[] {
+    const references: ExtractedReference[] = [];
+    const lines = chunkText.split('\n');
+
+    const functionSymbols = symbols.filter(s => s.kind === 'function' || s.kind === 'method');
+    const classSymbols = symbols.filter(s => s.kind === 'class');
+    const allDefinedNames = new Set(symbols.map(s => s.name));
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line) continue;
+      const lineNum = baseLine + i;
+
+      const containingSymbol = this.findContainingSymbolForLine(lineNum, symbols);
+
+      const newMatch = line.match(/\bnew\s+(\w+)\s*\(/);
+      if (newMatch?.[1]) {
+        const className = newMatch[1];
+        const targetExists = classSymbols.some(s => s.name === className);
+        if (targetExists && containingSymbol) {
+          references.push({
+            sourceId: containingSymbol.id,
+            targetName: className,
+            kind: 'instantiates',
+            line: lineNum,
+          });
+        }
+      }
+
+      const extendsMatch = line.match(/\bextends\s+(\w+)/);
+      if (extendsMatch?.[1]) {
+        const className = extendsMatch[1];
+        const targetExists = classSymbols.some(s => s.name === className);
+        if (targetExists && containingSymbol) {
+          references.push({
+            sourceId: containingSymbol.id,
+            targetName: className,
+            kind: 'extends',
+            line: lineNum,
+          });
+        }
+      }
+
+      for (const fnSym of functionSymbols) {
+        const fnName = fnSym.name;
+        if (line.includes(`${fnName}(`) && !line.includes(`function ${fnName}`) && !line.includes(`const ${fnName}`)) {
+          if (containingSymbol && containingSymbol.id !== fnSym.id) {
+            references.push({
+              sourceId: containingSymbol.id,
+              targetName: fnName,
+              kind: 'calls',
+              line: lineNum,
+            });
+          }
+        }
+      }
+    }
+
+    return references;
+  }
+
+  private findContainingSymbolForLine(lineNum: number, symbols: ExtractedSymbol[]): ExtractedSymbol | null {
+    let result: ExtractedSymbol | null = null;
+    for (const sym of symbols) {
+      if (sym.startLine <= lineNum && sym.endLine >= lineNum) {
+        result = sym;
+      } else if (sym.startLine < lineNum && sym.startLine > (result?.startLine ?? 0)) {
+        result = sym;
+      }
+    }
+    return result;
+  }
+
+  private findSymbolByName(name: string, symbols: ExtractedSymbol[]): ExtractedSymbol | undefined {
+    return symbols.find(s => s.qualifiedName === name || s.name === name);
+  }
+}

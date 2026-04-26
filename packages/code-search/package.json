@@ -2,7 +2,7 @@
   "name": "@opencode-telegram/code-search",
   "version": "0.1.0",
   "type": "module",
-  "description": "Code search/RAG tool with semantic search, LanceDB vector storage, Tree-sitter AST chunking, and live file watching",
+  "description": "Code search/RAG tool with semantic search, LanceDB vector storage, Chonkiejs AST chunking, and live file watching",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -13,34 +13,28 @@
   },
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsx watch src/index.ts",
+    "start": "node dist/cli.js",
+    "dev": "tsx watch src/cli.ts",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@chonkiejs/core": "^0.0.9",
     "@lancedb/lancedb": "^0.27.0",
+    "@langchain/community": "^1.1.27",
+    "apache-arrow": "18.1.0",
     "axios": "^1.6.0",
     "chokidar": "^3.5.3",
     "cors": "^2.8.5",
     "express": "^4.18.2",
     "openai": "^6.34.0",
+    "tree-sitter-wasms": "^0.1.13",
     "uuid": "^9.0.0",
-    "voyageai": "^0.2.0",
+    "voyageai": "^0.2.1",
+    "web-tree-sitter": "^0.26.8",
     "zod": "^3.22.0"
-  },
-  "optionalDependencies": {
-    "tree-sitter": "^0.25.0",
-    "tree-sitter-c": "^0.24.1",
-    "tree-sitter-cpp": "^0.23.4",
-    "tree-sitter-go": "^0.25.0",
-    "tree-sitter-javascript": "^0.25.0",
-    "tree-sitter-json": "^0.24.8",
-    "tree-sitter-python": "^0.25.0",
-    "tree-sitter-rust": "^0.24.0",
-    "tree-sitter-typescript": "^0.23.2"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -52,6 +46,6 @@
     "vitest": "^1.2.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   }
 }

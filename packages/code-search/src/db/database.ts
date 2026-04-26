@@ -1,6 +1,9 @@
 import type { CodeChunk, DependencyEdge, SearchResult, ProjectStats, SearchOptions } from '../types.js';
 import type { Node, Edge } from '../graph/types.js';
 import { EMBEDDING_DIMENSIONS } from '../types.js';
+import { Schema, Field, FixedSizeList, Float32, Utf8, Int32, Bool } from 'apache-arrow';
+import lancedb from '@lancedb/lancedb';
+import { BM25 } from '../search/bm25.js';
 
 const CODE_CHUNKS_TABLE = 'code_chunks';
 const DEPENDENCY_GRAPH_TABLE = 'dependency_graph';
@@ -20,6 +23,7 @@ interface CodeChunkRecord {
   projectPath: string;
   filePath: string;
   content: string;
+  summary?: string;
   startLine: number;
   endLine: number;
   language: string;
@@ -28,6 +32,7 @@ interface CodeChunkRecord {
   parentId?: string;
   metadata: string;
   vector: number[];
+  summaryVectorJson?: string;
 }
 
 interface DependencyEdgeRecord {
@@ -65,85 +70,78 @@ export class Database {
     const connect = lancedb.connect;
     this.db = await connect(this.uri);
 
-    try {
-      this.chunksTable = await this.db.createEmptyTable(this.codeChunksTable, {
-        schema: {
-          fields: [
-            { name: 'id', type: 'utf8' },
-            { name: 'projectPath', type: 'utf8' },
-            { name: 'filePath', type: 'utf8' },
-            { name: 'content', type: 'utf8' },
-            { name: 'startLine', type: 'int32' },
-            { name: 'endLine', type: 'int32' },
-            { name: 'language', type: 'utf8' },
-            { name: 'chunkType', type: 'utf8' },
-            { name: 'fqn', type: 'utf8', nullable: true },
-            { name: 'parentId', type: 'utf8', nullable: true },
-            { name: 'metadata', type: 'utf8' },
-            { name: 'vector', type: `fixed_size_list[float32, ${EMBEDDING_DIMENSIONS}]` },
-          ],
-        },
-      });
-    } catch {
+    const tableNames = await this.db.tableNames();
+    const existingTables = new Set(tableNames);
+
+    if (!existingTables.has(this.codeChunksTable)) {
+      const schema = new Schema([
+        new Field('id', new Utf8()),
+        new Field('projectPath', new Utf8()),
+        new Field('filePath', new Utf8()),
+        new Field('content', new Utf8()),
+        new Field('summary', new Utf8(), true),
+        new Field('startLine', new Int32()),
+        new Field('endLine', new Int32()),
+        new Field('language', new Utf8()),
+        new Field('chunkType', new Utf8()),
+        new Field('fqn', new Utf8(), true),
+        new Field('parentId', new Utf8(), true),
+        new Field('metadata', new Utf8()),
+        new Field('vector', new FixedSizeList(EMBEDDING_DIMENSIONS, new Field('', new Float32()))),
+        new Field('summaryVectorJson', new Utf8(), true),
+      ]);
+      this.chunksTable = await this.db.createEmptyTable(this.codeChunksTable, schema);
+    } else {
       this.chunksTable = await this.db.openTable(this.codeChunksTable);
     }
 
-    try {
-      this.graphTable = await this.db.createEmptyTable(this.dependencyGraphTable, {
-        schema: {
-          fields: [
-            { name: 'sourceId', type: 'utf8' },
-            { name: 'targetId', type: 'utf8' },
-            { name: 'sourceFile', type: 'utf8' },
-            { name: 'targetFile', type: 'utf8' },
-            { name: 'projectPath', type: 'utf8' },
-            { name: 'importName', type: 'utf8', nullable: true },
-            { name: 'line', type: 'int32', nullable: true },
-          ],
-        },
-      });
-    } catch {
+    if (!existingTables.has(this.dependencyGraphTable)) {
+      const schema = new Schema([
+        new Field('sourceId', new Utf8()),
+        new Field('targetId', new Utf8()),
+        new Field('sourceFile', new Utf8()),
+        new Field('targetFile', new Utf8()),
+        new Field('projectPath', new Utf8()),
+        new Field('importName', new Utf8(), true),
+        new Field('line', new Int32(), true),
+      ]);
+      this.graphTable = await this.db.createEmptyTable(this.dependencyGraphTable, schema);
+    } else {
       this.graphTable = await this.db.openTable(this.dependencyGraphTable);
     }
 
-    try {
-      this.nodesTable = await this.db.createEmptyTable(this.graphNodesTable, {
-        schema: {
-          fields: [
-            { name: 'id', type: 'utf8' },
-            { name: 'kind', type: 'utf8' },
-            { name: 'name', type: 'utf8' },
-            { name: 'qualifiedName', type: 'utf8' },
-            { name: 'filePath', type: 'utf8' },
-            { name: 'language', type: 'utf8' },
-            { name: 'startLine', type: 'int32' },
-            { name: 'endLine', type: 'int32' },
-            { name: 'startColumn', type: 'int32' },
-            { name: 'endColumn', type: 'int32' },
-            { name: 'isExported', type: 'bool' },
-            { name: 'projectPath', type: 'utf8' },
-            { name: 'metadata', type: 'utf8' },
-          ],
-        },
-      });
-    } catch {
+    if (!existingTables.has(this.graphNodesTable)) {
+      const schema = new Schema([
+        new Field('id', new Utf8()),
+        new Field('kind', new Utf8()),
+        new Field('name', new Utf8()),
+        new Field('qualifiedName', new Utf8()),
+        new Field('filePath', new Utf8()),
+        new Field('language', new Utf8()),
+        new Field('startLine', new Int32()),
+        new Field('endLine', new Int32()),
+        new Field('startColumn', new Int32()),
+        new Field('endColumn', new Int32()),
+        new Field('isExported', new Bool()),
+        new Field('projectPath', new Utf8()),
+        new Field('metadata', new Utf8()),
+      ]);
+      this.nodesTable = await this.db.createEmptyTable(this.graphNodesTable, schema);
+    } else {
       this.nodesTable = await this.db.openTable(this.graphNodesTable);
     }
 
-    try {
-      this.edgesTable = await this.db.createEmptyTable(this.graphEdgesTable, {
-        schema: {
-          fields: [
-            { name: 'source', type: 'utf8' },
-            { name: 'target', type: 'utf8' },
-            { name: 'kind', type: 'utf8' },
-            { name: 'projectPath', type: 'utf8' },
-            { name: 'metadata', type: 'utf8' },
-            { name: 'line', type: 'int32', nullable: true },
-          ],
-        },
-      });
-    } catch {
+    if (!existingTables.has(this.graphEdgesTable)) {
+      const schema = new Schema([
+        new Field('source', new Utf8()),
+        new Field('target', new Utf8()),
+        new Field('kind', new Utf8()),
+        new Field('projectPath', new Utf8()),
+        new Field('metadata', new Utf8()),
+        new Field('line', new Int32(), true),
+      ]);
+      this.edgesTable = await this.db.createEmptyTable(this.graphEdgesTable, schema);
+    } else {
       this.edgesTable = await this.db.openTable(this.graphEdgesTable);
     }
   }
@@ -152,13 +150,19 @@ export class Database {
     await this.upsertChunks([chunk], [embedding], projectPath);
   }
 
-  async upsertChunks(chunks: CodeChunk[], embeddings: number[][], projectPath: string): Promise<void> {
+  async upsertChunks(
+    chunks: CodeChunk[],
+    embeddings: number[][],
+    projectPath: string,
+    summaryEmbeddings?: number[][]
+  ): Promise<void> {
     if (!this.chunksTable) throw new Error('Database not initialized');
     const records = chunks.map((chunk, i) => ({
       id: chunk.id,
       projectPath,
       filePath: chunk.filePath,
       content: chunk.content,
+      summary: chunk.summary ?? null,
       startLine: chunk.startLine,
       endLine: chunk.endLine,
       language: chunk.language,
@@ -167,9 +171,16 @@ export class Database {
       parentId: chunk.parentId ?? null,
       metadata: JSON.stringify(chunk.metadata),
       vector: embeddings[i] ?? new Array(EMBEDDING_DIMENSIONS).fill(0),
+      summaryVectorJson: summaryEmbeddings?.[i] ? JSON.stringify(summaryEmbeddings[i]) : null,
     }));
     await this.chunksTable.add(records);
-    await this.chunksTable.createIndex({ column: 'vector', indexType: 'IVF_PQ' });
+    try {
+      await this.chunksTable.createIndex('vector', {
+        config: lancedb.Index.ivfPq({}),
+      });
+    } catch (err) {
+      // Index might already exist, ignore
+    }
   }
 
   async searchChunks(
@@ -179,6 +190,7 @@ export class Database {
     filters?: SearchOptions['filters']
   ): Promise<SearchResult[]> {
     if (!this.chunksTable) throw new Error('Database not initialized');
+
     let query = this.chunksTable.query();
     if (projectPath) {
       query = query.where(`projectPath = "${projectPath}"`);
@@ -194,12 +206,14 @@ export class Database {
       query = query.where(`chunkType IN [${types}]`);
     }
 
-    const results = await query.limit(limit).toArray();
+    const results = await query.nearestTo(embedding, { column: 'vector' }).limit(limit).toArray();
+
     return results.map((row: any) => ({
       chunk: {
         id: row.id,
         filePath: row.filePath,
         content: row.content,
+        summary: row.summary ?? undefined,
         startLine: row.startLine,
         endLine: row.endLine,
         language: row.language,
@@ -208,10 +222,83 @@ export class Database {
         parentId: row.parentId,
         metadata: JSON.parse(row.metadata ?? '{}'),
       },
-      score: 0,
+      score: row._distance ?? 0,
       query: '',
       highlights: [],
     }));
+  }
+
+  async searchChunksWithSummary(
+    projectPath: string,
+    contentEmbedding: number[],
+    summaryEmbedding: number[],
+    limit: number,
+    filters?: SearchOptions['filters'],
+    summaryWeight: number = 0.3
+  ): Promise<SearchResult[]> {
+    if (!this.chunksTable) throw new Error('Database not initialized');
+
+    let query = this.chunksTable.query();
+    if (projectPath) {
+      query = query.where(`projectPath = "${projectPath}"`);
+    }
+    if (filters?.language) {
+      query = query.where(`language = "${filters.language}"`);
+    }
+    if (filters?.filePath) {
+      query = query.where(`filePath LIKE "${filters.filePath}%"`);
+    }
+    if (filters?.chunkTypes && filters.chunkTypes.length > 0) {
+      const types = filters.chunkTypes.map(t => `"${t}"`).join(', ');
+      query = query.where(`chunkType IN [${types}]`);
+    }
+
+    const contentResults = await query.clone().nearestTo(contentEmbedding, { column: 'vector' }).limit(limit * 3).toArray();
+
+    if (contentResults.length === 0) return [];
+
+    const contentWeight = 1 - summaryWeight;
+    const finalResults: SearchResult[] = [];
+
+    for (const row of contentResults) {
+      const contentScore = row._distance !== undefined ? 1 - row._distance : 0;
+
+      let summaryScore = 0;
+      if (row.summaryVectorJson) {
+        try {
+          const summaryVec = JSON.parse(row.summaryVectorJson);
+          if (Array.isArray(summaryVec) && summaryVec.length === contentEmbedding.length) {
+            summaryScore = this.cosineSimilarity(summaryEmbedding, summaryVec);
+          }
+        } catch {
+          summaryScore = 0;
+        }
+      }
+
+      const combinedScore = (contentScore * contentWeight) + (summaryScore * summaryWeight);
+
+      finalResults.push({
+        chunk: {
+          id: row.id,
+          filePath: row.filePath,
+          content: row.content,
+          summary: row.summary ?? undefined,
+          startLine: row.startLine,
+          endLine: row.endLine,
+          language: row.language,
+          chunkType: row.chunkType as CodeChunk['chunkType'],
+          fqn: row.fqn,
+          parentId: row.parentId,
+          metadata: JSON.parse(row.metadata ?? '{}'),
+        },
+        score: combinedScore,
+        query: '',
+        highlights: [],
+      });
+    }
+
+    finalResults.sort((a, b) => b.score - a.score);
+    return finalResults.slice(0, limit);
   }
 
   async deleteProjectChunks(projectPath: string): Promise<void> {
@@ -225,7 +312,7 @@ export class Database {
     if (!this.chunksTable) throw new Error('Database not initialized');
     const results = await this.chunksTable.query()
       .where(`projectPath = "${projectPath}"`)
-      .select(['filePath', 'content', 'language'])
+      .select(['filePath', 'content', 'language', 'startLine', 'endLine'])
       .toArray();
 
     const files = new Set<string>();
@@ -278,12 +365,14 @@ export class Database {
       endColumn: node.endColumn,
       isExported: node.isExported ?? false,
       projectPath,
+      metadata: JSON.stringify({}),
     }));
     await this.nodesTable.add(records);
   }
 
   async upsertEdges(edges: Edge[], projectPath: string): Promise<void> {
     if (!this.edgesTable) throw new Error('Database not initialized');
+    if (edges.length === 0) return;
     const records = edges.map(edge => ({
       source: edge.source,
       target: edge.target,
@@ -404,6 +493,354 @@ export class Database {
   async search(queryEmbedding: number[], options?: Partial<SearchOptions>): Promise<SearchResult[]> {
     const projectPath = options?.projectPath ?? '';
     return this.searchChunks(projectPath, queryEmbedding, options?.limit ?? 10, options?.filters);
+  }
+
+  async searchWithGraphBoost(
+    queryEmbedding: number[],
+    options?: Partial<SearchOptions & { graphBoost?: number; maxResults?: number }>
+  ): Promise<SearchResult[]> {
+    if (!this.chunksTable || !this.nodesTable || !this.edgesTable) {
+      throw new Error('Database not initialized');
+    }
+
+    const projectPath = options?.projectPath ?? '';
+    const limit = options?.limit ?? 10;
+    const graphBoost = options?.graphBoost ?? 0.3;
+    const maxResults = options?.maxResults ?? limit * 3;
+
+    const vectorResults = await this.searchChunks(projectPath, queryEmbedding, maxResults, options?.filters);
+
+    if (vectorResults.length === 0) return [];
+
+    const fqnToChunk = new Map<string, SearchResult>();
+    for (const result of vectorResults) {
+      if (result.chunk.fqn) {
+        fqnToChunk.set(result.chunk.fqn, result);
+      }
+    }
+
+    const nodeMap = new Map<string, { id: string; qualifiedName: string }>();
+    const nodes: Array<{ id: string; qualifiedName: string }> = await this.nodesTable.query()
+      .where(projectPath ? `filePath LIKE "${projectPath}%"` : '1=1')
+      .select(['id', 'qualifiedName'])
+      .toArray();
+    for (const node of nodes) {
+      nodeMap.set(node.qualifiedName, { id: node.id, qualifiedName: node.qualifiedName });
+    }
+
+    const relatedFqns = new Set<string>();
+    for (const [fqn, node] of nodeMap) {
+      const edges: Array<{ source: string; target: string }> = await this.edgesTable.query()
+        .where(`source = "${node.id}" OR target = "${node.id}"`)
+        .select(['source', 'target'])
+        .toArray();
+
+      for (const edge of edges) {
+        const relatedId = edge.source === node.id ? edge.target : edge.source;
+        const relatedNode = nodes.find((n: { id: string }) => n.id === relatedId);
+        if (relatedNode) {
+          relatedFqns.add(relatedNode.qualifiedName);
+        }
+      }
+    }
+
+    const boostedResults = vectorResults.map(result => {
+      let boost = 0;
+      if (result.chunk.fqn && relatedFqns.has(result.chunk.fqn)) {
+        boost = graphBoost;
+      }
+      return {
+        ...result,
+        score: result.score + boost,
+      };
+    });
+
+    boostedResults.sort((a, b) => b.score - a.score);
+    return boostedResults.slice(0, limit);
+  }
+
+  async searchHybrid(
+    queryText: string,
+    queryEmbedding: number[],
+    options?: Partial<SearchOptions & { graphBoost?: number; maxResults?: number; bm25Weight?: number; vectorWeight?: number; graphWeight?: number }>
+  ): Promise<SearchResult[]> {
+    if (!this.chunksTable || !this.nodesTable || !this.edgesTable) {
+      throw new Error('Database not initialized');
+    }
+
+    const projectPath = options?.projectPath ?? '';
+    const limit = options?.limit ?? 10;
+    const graphBoost = options?.graphBoost ?? 0.3;
+    const maxResults = options?.maxResults ?? limit * 5;
+    const bm25Weight = options?.bm25Weight ?? 0.3;
+    const vectorWeight = options?.vectorWeight ?? 0.5;
+    const graphWeight = options?.graphWeight ?? 0.2;
+
+    let query = this.chunksTable.query();
+    if (projectPath) {
+      query = query.where(`projectPath = "${projectPath}"`);
+    }
+    if (options?.filters?.language) {
+      query = query.where(`language = "${options.filters.language}"`);
+    }
+    if (options?.filters?.filePath) {
+      query = query.where(`filePath LIKE "${options.filters.filePath}%"`);
+    }
+
+    const allChunks = await query.select(['id', 'filePath', 'content', 'startLine', 'endLine', 'language', 'chunkType', 'fqn', 'metadata']).toArray();
+
+    if (allChunks.length === 0) return [];
+
+    const bm25 = new BM25();
+    const contents = allChunks.map((row: any) => row.content as string);
+    bm25.index(contents);
+
+    const bm25Results = bm25.search(queryText, maxResults);
+    const bm25ScoreMap = new Map<number, number>();
+    const firstBm25Result = bm25Results[0];
+    const maxBm25 = firstBm25Result ? firstBm25Result.score : 1;
+    for (const r of bm25Results) {
+      bm25ScoreMap.set(r.index, r.score / maxBm25);
+    }
+
+    const nodeMap = new Map<string, { id: string; qualifiedName: string }>();
+    const nodes: Array<{ id: string; qualifiedName: string }> = await this.nodesTable.query()
+      .where(projectPath ? `filePath LIKE "${projectPath}%"` : '1=1')
+      .select(['id', 'qualifiedName'])
+      .toArray();
+    for (const node of nodes) {
+      nodeMap.set(node.qualifiedName, { id: node.id, qualifiedName: node.qualifiedName });
+    }
+
+    const relatedFqns = new Set<string>();
+    for (const [, node] of nodeMap) {
+      const edges: Array<{ source: string; target: string }> = await this.edgesTable.query()
+        .where(`source = "${node.id}" OR target = "${node.id}"`)
+        .select(['source', 'target'])
+        .toArray();
+
+      for (const edge of edges) {
+        const relatedId = edge.source === node.id ? edge.target : edge.source;
+        const relatedNode = nodes.find((n: { id: string }) => n.id === relatedId);
+        if (relatedNode) {
+          relatedFqns.add(relatedNode.qualifiedName);
+        }
+      }
+    }
+
+    const chunkIdToIndex = new Map<string, number>();
+    allChunks.forEach((_: any, idx: number) => chunkIdToIndex.set((_ as any).id, idx));
+
+    const nodeResults = await this.searchChunks(projectPath, queryEmbedding, maxResults, options?.filters);
+    const vectorScoreMap = new Map<number, number>();
+    const firstNodeResult = nodeResults[0];
+    const maxVector = firstNodeResult ? firstNodeResult.score : 1;
+    for (const r of nodeResults) {
+      const idx = chunkIdToIndex.get(r.chunk.id);
+      if (idx !== undefined) {
+        vectorScoreMap.set(idx, r.score / maxVector);
+      }
+    }
+
+    const finalScores: Array<{ index: number; combinedScore: number; chunk: SearchResult['chunk'] }> = [];
+
+    for (let i = 0; i < allChunks.length; i++) {
+      const row = allChunks[i] as any;
+      const bm25Score = bm25ScoreMap.get(i) ?? 0;
+      const vectorScore = vectorScoreMap.get(i) ?? 0;
+
+      let graphBoostScore = 0;
+      if (row.fqn && relatedFqns.has(row.fqn)) {
+        graphBoostScore = graphBoost;
+      }
+
+      const combinedScore = (bm25Score * bm25Weight) + (vectorScore * vectorWeight) + (graphBoostScore * graphWeight);
+
+      if (combinedScore > 0) {
+        finalScores.push({
+          index: i,
+          combinedScore,
+          chunk: {
+            id: row.id,
+            filePath: row.filePath,
+            content: row.content,
+            startLine: row.startLine,
+            endLine: row.endLine,
+            language: row.language,
+            chunkType: row.chunkType as CodeChunk['chunkType'],
+            fqn: row.fqn,
+            metadata: JSON.parse(row.metadata ?? '{}'),
+          },
+        });
+      }
+    }
+
+    finalScores.sort((a, b) => b.combinedScore - a.combinedScore);
+
+    return finalScores.slice(0, limit).map(r => ({
+      chunk: r.chunk,
+      score: r.combinedScore,
+      query: queryText,
+      highlights: [],
+    }));
+  }
+
+  async searchHybridWithSummary(
+    queryText: string,
+    contentEmbedding: number[],
+    summaryEmbedding: number[],
+    options?: Partial<SearchOptions & { graphBoost?: number; maxResults?: number; bm25Weight?: number; vectorWeight?: number; graphWeight?: number; summaryWeight?: number }>
+  ): Promise<SearchResult[]> {
+    if (!this.chunksTable || !this.nodesTable || !this.edgesTable) {
+      throw new Error('Database not initialized');
+    }
+
+    const projectPath = options?.projectPath ?? '';
+    const limit = options?.limit ?? 10;
+    const graphBoost = options?.graphBoost ?? 0.3;
+    const maxResults = options?.maxResults ?? limit * 5;
+    const bm25Weight = options?.bm25Weight ?? 0.25;
+    const vectorWeight = options?.vectorWeight ?? 0.35;
+    const graphWeight = options?.graphWeight ?? 0.15;
+    const summaryWeight = options?.summaryWeight ?? 0.25;
+
+    let query = this.chunksTable.query();
+    if (projectPath) {
+      query = query.where(`projectPath = "${projectPath}"`);
+    }
+    if (options?.filters?.language) {
+      query = query.where(`language = "${options.filters.language}"`);
+    }
+    if (options?.filters?.filePath) {
+      query = query.where(`filePath LIKE "${options.filters.filePath}%"`);
+    }
+
+    const allChunks = await query.select([
+      'id', 'filePath', 'content', 'summary', 'startLine', 'endLine',
+      'language', 'chunkType', 'fqn', 'metadata', 'vector', 'summaryVectorJson'
+    ]).toArray();
+
+    if (allChunks.length === 0) return [];
+
+    const bm25 = new BM25();
+    const contents = allChunks.map((row: any) => row.content as string);
+    bm25.index(contents);
+
+    const bm25Results = bm25.search(queryText, maxResults);
+    const bm25ScoreMap = new Map<number, number>();
+    const firstBm25Result = bm25Results[0];
+    const maxBm25 = firstBm25Result ? firstBm25Result.score : 1;
+    for (const r of bm25Results) {
+      bm25ScoreMap.set(r.index, r.score / maxBm25);
+    }
+
+    const nodeMap = new Map<string, { id: string; qualifiedName: string }>();
+    const nodes: Array<{ id: string; qualifiedName: string }> = await this.nodesTable.query()
+      .where(projectPath ? `filePath LIKE "${projectPath}%"` : '1=1')
+      .select(['id', 'qualifiedName'])
+      .toArray();
+    for (const node of nodes) {
+      nodeMap.set(node.qualifiedName, { id: node.id, qualifiedName: node.qualifiedName });
+    }
+
+    const relatedFqns = new Set<string>();
+    for (const [, node] of nodeMap) {
+      const edges: Array<{ source: string; target: string }> = await this.edgesTable.query()
+        .where(`source = "${node.id}" OR target = "${node.id}"`)
+        .select(['source', 'target'])
+        .toArray();
+
+      for (const edge of edges) {
+        const relatedId = edge.source === node.id ? edge.target : edge.source;
+        const relatedNode = nodes.find((n: { id: string }) => n.id === relatedId);
+        if (relatedNode) {
+          relatedFqns.add(relatedNode.qualifiedName);
+        }
+      }
+    }
+
+    const chunkIdToIndex = new Map<string, number>();
+    allChunks.forEach((_: any, idx: number) => chunkIdToIndex.set((_ as any).id, idx));
+
+    const nodeResults = await this.searchChunks(projectPath, contentEmbedding, maxResults, options?.filters);
+    const vectorScoreMap = new Map<number, number>();
+    const firstNodeResult = nodeResults[0];
+    const maxVector = firstNodeResult ? firstNodeResult.score : 1;
+    for (const r of nodeResults) {
+      const idx = chunkIdToIndex.get(r.chunk.id);
+      if (idx !== undefined) {
+        vectorScoreMap.set(idx, r.score / maxVector);
+      }
+    }
+
+    const finalScores: Array<{ index: number; combinedScore: number; chunk: SearchResult['chunk'] }> = [];
+
+    for (let i = 0; i < allChunks.length; i++) {
+      const row = allChunks[i] as any;
+      const bm25Score = bm25ScoreMap.get(i) ?? 0;
+      const vectorScore = vectorScoreMap.get(i) ?? 0;
+
+      let graphBoostScore = 0;
+      if (row.fqn && relatedFqns.has(row.fqn)) {
+        graphBoostScore = graphBoost;
+      }
+
+      let summaryScore = 0;
+      if (row.summaryVectorJson) {
+        try {
+          const summaryVec = JSON.parse(row.summaryVectorJson);
+          if (Array.isArray(summaryVec) && summaryVec.length === summaryEmbedding.length) {
+            summaryScore = this.cosineSimilarity(summaryEmbedding, summaryVec);
+          }
+        } catch {
+          summaryScore = 0;
+        }
+      }
+
+      const combinedScore = (bm25Score * bm25Weight) + (vectorScore * vectorWeight) + (graphBoostScore * graphWeight) + (summaryScore * summaryWeight);
+
+      if (combinedScore > 0) {
+        finalScores.push({
+          index: i,
+          combinedScore,
+          chunk: {
+            id: row.id,
+            filePath: row.filePath,
+            content: row.content,
+            summary: row.summary ?? undefined,
+            startLine: row.startLine,
+            endLine: row.endLine,
+            language: row.language,
+            chunkType: row.chunkType as CodeChunk['chunkType'],
+            fqn: row.fqn,
+            metadata: JSON.parse(row.metadata ?? '{}'),
+          },
+        });
+      }
+    }
+
+    finalScores.sort((a, b) => b.combinedScore - a.combinedScore);
+
+    return finalScores.slice(0, limit).map(r => ({
+      chunk: r.chunk,
+      score: r.combinedScore,
+      query: queryText,
+      highlights: [],
+    }));
+  }
+
+  private cosineSimilarity(a: number[], b: number[]): number {
+    if (a.length !== b.length) return 0;
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < a.length; i++) {
+      dot += (a[i] ?? 0) * (b[i] ?? 0);
+      normA += (a[i] ?? 0) * (a[i] ?? 0);
+      normB += (b[i] ?? 0) * (b[i] ?? 0);
+    }
+    const norm = Math.sqrt(normA) * Math.sqrt(normB);
+    return norm > 0 ? dot / norm : 0;
   }
 
   async removeByPath(path: string): Promise<void> {

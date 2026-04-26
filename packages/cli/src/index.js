@@ -772,7 +772,7 @@ if (command === "mode") {
     process.exit(0);
 }
 
-if (command === "code-index") {
+if (command === "code-index" || command === "index") {
     const watch = args.includes("--watch");
     const remaining = args.filter((a) => a !== "--watch");
     const projectPath = remaining[0];

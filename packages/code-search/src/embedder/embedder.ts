@@ -7,89 +7,105 @@ interface EmbedderConfig {
   baseUrl?: string;
 }
 
+interface OpenAIResponse {
+  data?: Array<{ embedding: number[]; index: number }>;
+  error?: { message: string };
+}
+
 export class Embedder {
   private config: EmbedderConfig;
-  private client: unknown = null;
+  private apiKey: string = '';
+  private model: string = 'text-embedding-3-large';
+  private baseUrl: string = 'https://api.openai.com/v1';
 
   constructor(config: EmbedderConfig) {
     this.config = config;
   }
 
   async initialize(): Promise<void> {
-    if (this.config.provider === 'voyage') {
-      const { VoyageAIClient } = await import('voyageai');
-      if (!this.config.apiKey) throw new Error('VOYAGE_API_KEY is required for Voyage provider');
-      this.client = new VoyageAIClient({ apiKey: this.config.apiKey });
-    } else if (this.config.provider === 'openai') {
-      const { OpenAI } = await import('openai');
-      if (!this.config.apiKey) throw new Error('OPENAI_API_KEY is required for OpenAI provider');
-      this.client = new OpenAI({ apiKey: this.config.apiKey });
+    this.apiKey = this.config.apiKey ?? process.env.OPENAI_API_KEY ?? '';
+    this.model = this.config.model ?? 'text-embedding-3-large';
+
+    console.log('[Embedder] provider:', this.config.provider);
+    console.log('[Embedder] apiKey:', this.apiKey ? 'set' : 'MISSING');
+    console.log('[Embedder] model:', this.model);
+    if (!this.apiKey) throw new Error('OPENAI_API_KEY is required for OpenAI provider');
+  }
+
+  private async embedOpenAI(texts: string[]): Promise<number[][]> {
+    const results: number[][] = new Array(texts.length);
+    const batchSize = 100;
+
+    for (let i = 0; i < texts.length; i += batchSize) {
+      const batch = texts.slice(i, i + batchSize);
+      let retries = 3;
+      while (retries > 0) {
+        try {
+          const response = await fetch(`${this.baseUrl}/embeddings`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${this.apiKey}`,
+            },
+            body: JSON.stringify({
+              model: this.model,
+              input: batch,
+            }),
+          });
+
+          const data = await response.json() as OpenAIResponse;
+
+          if (!response.ok || data.error) {
+            throw new Error(data.error?.message ?? `HTTP ${response.status}`);
+          }
+
+          for (const item of data.data ?? []) {
+            results[i + item.index] = item.embedding;
+          }
+          break;
+        } catch (err) {
+          retries--;
+          if (retries === 0) throw err;
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
     }
-    // 'local' needs no client initialization
+
+    return results;
   }
 
   async embedChunks(chunks: CodeChunk[]): Promise<number[][]> {
-    if (!this.client) await this.initialize();
+    await this.initialize();
+    const texts = chunks.map(c => c.content.trim() === '' ? ' ' : c.content);
+    console.log('[embedChunks] Total chunks:', chunks.length);
 
-    if (this.config.provider === 'voyage' && this.client) {
-      const response = await (this.client as any).embed({
-        model: this.config.model ?? 'voyage-code-3',
-        input: chunks.map(c => c.content),
-      });
-      return response.data.map((d: any) => d.embedding);
-    }
-
-    if (this.config.provider === 'openai' && this.client) {
-      const model = this.config.model ?? 'text-embedding-3-small';
-      const response = await (this.client as any).embeddings.create({
-        model,
-        input: chunks.map(c => c.content),
-      });
-      return response.data.map((d: any) => d.embedding);
+    if (this.config.provider === 'openai') {
+      return this.embedOpenAI(texts);
     }
 
     if (this.config.provider === 'local') {
-      return this.embedLocal(chunks.map(c => c.content));
+      return this.embedLocal(texts);
     }
 
-    // Fallback: zero vectors
-    return chunks.map(() => new Array(1536).fill(0));
+    return chunks.map(() => new Array(3072).fill(0));
   }
 
   async embedQuery(query: string): Promise<number[]> {
-    if (!this.client) await this.initialize();
-
-    if (this.config.provider === 'voyage' && this.client) {
-      const response = await (this.client as any).embed({
-        model: this.config.model ?? 'voyage-code-3',
-        input: [query],
-      });
-      return response.data[0].embedding;
-    }
-
-    if (this.config.provider === 'openai' && this.client) {
-      const model = this.config.model ?? 'text-embedding-3-small';
-      const response = await (this.client as any).embeddings.create({
-        model,
-        input: [query],
-      });
-      return response.data[0].embedding;
+    await this.initialize();
+    if (this.config.provider === 'openai') {
+      const results = await this.embedOpenAI([query]);
+      return results[0] ?? new Array(3072).fill(0);
     }
 
     if (this.config.provider === 'local') {
-      return this.embedLocal([query])[0] ?? new Array(1536).fill(0);
+      return this.embedLocal([query])[0] ?? new Array(3072).fill(0);
     }
 
-    return new Array(1536).fill(0);
+    return new Array(3072).fill(0);
   }
 
-  /**
-   * Local TF-IDF based embedding (no API required).
-   * Produces fixed-dimension vectors using word frequency hashing.
-   * Not as semantic as dedicated embedding models, but works offline.
-   */
   private embedLocal(texts: string[]): number[][] {
-    const DIM = 1536;
+    const DIM = 3072;
     const results: number[][] = [];
 
     for (const text of texts) {
@@ -103,7 +119,6 @@ export class Embedder {
       let idx = 0;
       freq.forEach((count, word) => {
         if (idx >= DIM) return;
-        // Deterministic hash to pick vector index
         let hash = 5381;
         for (let i = 0; i < word.length; i++) {
           hash = ((hash << 5) + hash) + word.charCodeAt(i);
@@ -113,7 +128,6 @@ export class Embedder {
         idx++;
       });
 
-      // L2 normalize
       const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
       if (norm > 0) {
         for (let i = 0; i < DIM; i++) vec[i] /= norm;

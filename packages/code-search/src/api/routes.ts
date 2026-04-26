@@ -15,11 +15,28 @@ export function createSearchRouter(engine: CodeSearchEngine): Router {
       res.json({ success: true, stats });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
+      const stack = error instanceof Error ? error.stack : undefined;
+      console.error('[/api/search/index] Error:', message, stack);
       res.status(500).json({ error: message });
     }
   });
 
   router.post('/search', async (req: Request, res: Response) => {
+    try {
+      const { query, projectPath, options } = req.body;
+      if (!query || typeof query !== 'string') {
+        res.status(400).json({ error: 'query must be a string' });
+        return;
+      }
+      const results = await engine.searchWithGraph(query, { ...options, projectPath });
+      res.json({ success: true, results });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.post('/search/vector-only', async (req: Request, res: Response) => {
     try {
       const { query, projectPath, options } = req.body;
       if (!query || typeof query !== 'string') {
