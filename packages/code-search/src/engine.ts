@@ -6,6 +6,7 @@ import { ChunkSummarizer } from './summarizer/summarizer.js';
 import type { SearchOptions, IndexOptions, ProjectStats, SearchResult, CodeChunk } from './types.js';
 import type { Node, Context } from './graph/types.js';
 import { DefaultConfig, type Config } from './config/index.js';
+import { loadGlobalConfig, getSearchModeOptions } from './config/global-config.js';
 
 export class CodeSearchEngine {
   private db: Database;
@@ -46,64 +47,119 @@ export class CodeSearchEngine {
 
   async indexPaths(paths: string[], options?: Partial<IndexOptions>): Promise<ProjectStats> {
     this.currentProjectPath = paths[0] ?? '';
-    const chunks = await this.chunker.chunkDirectory(paths, { ...options, projectPath: this.currentProjectPath });
+
+    console.log('[CodeSearchEngine] Getting indexed file hashes...');
+    const indexedHashes = await this.db.getIndexedFileHashes(this.currentProjectPath);
+    console.log('[CodeSearchEngine] Found', indexedHashes.size, 'indexed files');
+
+    let skippedCount = 0;
+    let processedCount = 0;
+
+    const chunks = await this.chunker.chunkDirectory(paths, {
+      ...options,
+      projectPath: this.currentProjectPath,
+      indexedFileHashes: indexedHashes,
+      onFileSkipped: (filePath, reason) => {
+        if (reason === 'unchanged') {
+          skippedCount++;
+        }
+      },
+      onFileProcessed: (filePath, chunkCount) => {
+        processedCount++;
+      },
+    });
+
+    console.log('[CodeSearchEngine] Files:', processedCount, 'indexed,', skippedCount, 'skipped (unchanged)');
+
+    if (chunks.length === 0) {
+      console.log('[CodeSearchEngine] No new or changed files to index');
+      return this.getStats();
+    }
+
+    console.log('[CodeSearchEngine] Total chunks to index:', chunks.length);
     const embeddings = await this.embedder.embedChunks(chunks);
 
-    console.log('[CodeSearchEngine] Generating chunk summaries...');
-    const summaries = await this.summarizer.summarizeChunks(
-      chunks.map(c => ({ content: c.content, filePath: c.filePath }))
-    );
+    const globalConfig = loadGlobalConfig();
+    const generateSummary = options?.generateSummary ?? globalConfig.generateSummary;
+    let chunksWithSummaries: CodeChunk[] = chunks;
+    let summaryEmbeddings: number[][] | undefined;
 
-    const chunksWithSummaries: CodeChunk[] = chunks.map((chunk, i) => ({
-      ...chunk,
-      summary: summaries[i] || undefined,
-    }));
+    if (generateSummary) {
+      console.log('[CodeSearchEngine] Generating chunk summaries...');
+      const summaries = await this.summarizer.summarizeChunks(
+        chunks.map(c => ({ content: c.content, filePath: c.filePath }))
+      );
 
-    console.log('[CodeSearchEngine] Generating summary embeddings...');
-    const summaryEmbeddings = await this.embedder.embedChunks(chunksWithSummaries.map(c => ({
-      ...c,
-      content: c.summary ?? c.content,
-    })));
+      chunksWithSummaries = chunks.map((chunk, i) => ({
+        ...chunk,
+        summary: summaries[i] || undefined,
+      }));
 
+      console.log('[CodeSearchEngine] Generating summary embeddings...');
+      summaryEmbeddings = await this.embedder.embedChunks(chunksWithSummaries.map(c => ({
+        ...c,
+        content: c.summary ?? c.content,
+      })));
+    } else {
+      console.log('[CodeSearchEngine] Skipping summary generation (generateSummary=false)');
+    }
+
+    console.log('[CodeSearchEngine] Storing chunks in database...');
     await this.db.upsertChunks(chunksWithSummaries, embeddings, this.currentProjectPath, summaryEmbeddings);
     return this.getStats();
   }
 
   async search(query: string, options?: Partial<SearchOptions>): Promise<SearchResult[]> {
-    const useGraph = options?.useGraph ?? true;
-    const useHybrid = options?.useHybrid ?? true;
-    const useSummaryEmbedding = options?.useSummaryEmbedding ?? true;
-    const graphBoost = options?.graphBoost ?? 0.3;
-    const summaryWeight = options?.summaryWeight ?? 0.3;
+    const globalConfig = loadGlobalConfig();
+    const globalModeOptions = getSearchModeOptions(globalConfig.searchMode);
+
+    const useGraph = options?.useGraph ?? globalModeOptions.useGraph;
+    const useHybrid = options?.useHybrid ?? globalModeOptions.useHybrid;
+    const useSummaryEmbedding = options?.useSummaryEmbedding ?? globalModeOptions.useSummaryEmbedding;
+
+    if (!globalConfig.generateSummary) {
+      const queryEmbedding = await this.embedder.embedQuery(query);
+      return this.db.searchHybrid(query, queryEmbedding, {
+        ...options,
+        projectPath: this.currentProjectPath,
+        graphBoost: options?.graphBoost ?? globalConfig.graphWeight,
+        bm25Weight: options?.bm25Weight ?? globalConfig.bm25Weight,
+        vectorWeight: options?.vectorWeight ?? globalConfig.vectorWeight,
+      });
+    }
+
+    const graphBoost = options?.graphBoost ?? globalConfig.graphWeight;
+    const summaryWeight = options?.summaryWeight ?? globalConfig.summaryWeight;
+    const bm25Weight = options?.bm25Weight ?? globalConfig.bm25Weight;
+    const vectorWeight = options?.vectorWeight ?? globalConfig.vectorWeight;
+
+    const resolvedOptions = {
+      ...options,
+      projectPath: this.currentProjectPath,
+      useGraph,
+      useHybrid,
+      useSummaryEmbedding,
+      graphBoost,
+      summaryWeight,
+      bm25Weight,
+      vectorWeight,
+    };
 
     const queryEmbedding = await this.embedder.embedQuery(query);
 
     if (useSummaryEmbedding && useHybrid) {
-      return this.db.searchHybridWithSummary(query, queryEmbedding, queryEmbedding, {
-        ...options,
-        projectPath: this.currentProjectPath,
-        graphBoost,
-        summaryWeight,
-      });
+      return this.db.searchHybridWithSummary(query, queryEmbedding, queryEmbedding, resolvedOptions);
     }
 
     if (useHybrid) {
-      return this.db.searchHybrid(query, queryEmbedding, {
-        ...options,
-        projectPath: this.currentProjectPath,
-        graphBoost,
-      });
+      return this.db.searchHybrid(query, queryEmbedding, resolvedOptions);
     }
 
     if (useGraph) {
-      return this.db.searchWithGraphBoost(queryEmbedding, {
-        ...options,
-        projectPath: this.currentProjectPath,
-        graphBoost,
-      });
+      return this.db.searchWithGraphBoost(queryEmbedding, resolvedOptions);
     }
 
-    const results = await this.db.search(queryEmbedding, options);
+    const results = await this.db.search(queryEmbedding, resolvedOptions);
     return results;
   }
 
@@ -130,7 +186,11 @@ export class CodeSearchEngine {
       ignorePatterns: this.config.watcher.ignorePatterns,
     });
     this.watcher.on('change', async (filePath: string) => {
-      const chunks = await this.chunker.chunkFile(filePath);
+      const { createHash } = await import('crypto');
+      const { readFile } = await import('fs/promises');
+      const content = await readFile(filePath, 'utf-8');
+      const hash = createHash('sha256').update(content).digest('hex');
+      const chunks = await this.chunker.chunkFile(filePath, hash);
       const embeddings = await this.embedder.embedChunks(chunks);
       await this.db.upsertChunks(chunks, embeddings, this.currentProjectPath);
     });

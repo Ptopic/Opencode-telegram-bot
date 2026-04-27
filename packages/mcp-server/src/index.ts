@@ -340,12 +340,13 @@ class CodeSearchMCPServer {
   }
 
   private async handleIndex(input: IndexInput) {
-    const { paths, extensions, maxFileSize, ignorePatterns } = input;
+    const { paths, extensions, maxFileSize, ignorePatterns, generateSummary } = input;
 
     const stats = await this.client.indexPaths(paths, {
       extensions,
       maxFileSize,
       ignorePatterns,
+      generateSummary,
     });
 
     return {

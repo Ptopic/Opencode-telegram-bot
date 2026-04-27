@@ -33,7 +33,7 @@ export class CodeSearchClient {
     options?: IndexOptions
   ): Promise<ProjectStats> {
     const response = await this.client.post<ApiResponse<ProjectStats>>(
-      '/index',
+      '/api/search/index',
       { paths, options }
     );
     if (!response.data.success || !response.data.data) {
@@ -50,27 +50,26 @@ export class CodeSearchClient {
     projectPath: string | undefined,
     options?: SearchOptions
   ): Promise<SearchResult[]> {
-    const response = await this.client.post<ApiResponse<SearchResult[]>>(
-      '/search',
-      { query, projectPath, options }
-    );
+    const response = await this.client.post<
+      { success: boolean; results: SearchResult[]; error?: string }
+    >('/api/search/search', { query, projectPath, options });
     if (!response.data.success) {
       throw new Error(response.data.error || 'Search operation failed');
     }
-    return response.data.data || [];
+    return response.data.results || [];
   }
 
   /**
    * Get index statistics
    */
   async getStats(projectPath?: string): Promise<ProjectStats> {
-    const response = await this.client.get<ApiResponse<ProjectStats>>('/stats', {
+    const response = await this.client.get<ApiResponse<ProjectStats>>('/api/search/stats', {
       params: { projectPath: projectPath ?? '' },
     });
-    if (!response.data.success || !response.data.data) {
+    if (!response.data.success || !response.data.stats) {
       throw new Error(response.data.error || 'Failed to get stats');
     }
-    return response.data.data;
+    return response.data.stats;
   }
 
   /**
@@ -78,7 +77,7 @@ export class CodeSearchClient {
    */
   async removeIndex(path: string): Promise<void> {
     const response = await this.client.delete<ApiResponse<void>>(
-      `/index/${encodeURIComponent(path)}`
+      `/api/search/index/${encodeURIComponent(path)}`
     );
     if (!response.data.success) {
       throw new Error(response.data.error || 'Failed to remove index');
@@ -90,7 +89,7 @@ export class CodeSearchClient {
    */
   async startWatching(paths: string[]): Promise<void> {
     const response = await this.client.post<ApiResponse<void>>(
-      '/watch/start',
+      '/api/search/watch/start',
       { paths }
     );
     if (!response.data.success) {
@@ -102,7 +101,7 @@ export class CodeSearchClient {
    * Stop watching for changes
    */
   async stopWatching(): Promise<void> {
-    const response = await this.client.post<ApiResponse<void>>('/watch/stop');
+    const response = await this.client.post<ApiResponse<void>>('/api/search/watch/stop');
     if (!response.data.success) {
       throw new Error(response.data.error || 'Failed to stop watching');
     }
@@ -113,7 +112,7 @@ export class CodeSearchClient {
    */
   async searchGraphNodes(query: string): Promise<GraphNode[]> {
     const response = await this.client.get<ApiResponse<GraphNode[]>>(
-      '/graph/search',
+      '/api/graph/search',
       { params: { q: query } }
     );
     if (!response.data.success) {
@@ -127,7 +126,7 @@ export class CodeSearchClient {
    */
   async getGraphContext(id: string): Promise<GraphContext | null> {
     const response = await this.client.get<ApiResponse<GraphContext>>(
-      `/graph/node/${encodeURIComponent(id)}`
+      `/api/graph/node/${encodeURIComponent(id)}`
     );
     if (!response.data.success) {
       if (response.status === 404) {
@@ -143,7 +142,7 @@ export class CodeSearchClient {
    */
   async getGraphCallers(qualifiedName: string): Promise<GraphNode[]> {
     const response = await this.client.get<ApiResponse<GraphNode[]>>(
-      `/graph/callers/${encodeURIComponent(qualifiedName)}`
+      `/api/graph/callers/${encodeURIComponent(qualifiedName)}`
     );
     if (!response.data.success) {
       throw new Error(response.data.error || 'Failed to get callers');
@@ -156,7 +155,7 @@ export class CodeSearchClient {
    */
   async getGraphCallees(qualifiedName: string): Promise<GraphNode[]> {
     const response = await this.client.get<ApiResponse<GraphNode[]>>(
-      `/graph/callees/${encodeURIComponent(qualifiedName)}`
+      `/api/graph/callees/${encodeURIComponent(qualifiedName)}`
     );
     if (!response.data.success) {
       throw new Error(response.data.error || 'Failed to get callees');
@@ -169,7 +168,7 @@ export class CodeSearchClient {
    */
   async findDeadCode(): Promise<DeadCodeResult[]> {
     const response = await this.client.get<ApiResponse<DeadCodeResult[]>>(
-      '/graph/dead-code'
+      '/api/graph/dead-code'
     );
     if (!response.data.success) {
       throw new Error(response.data.error || 'Failed to find dead code');
@@ -182,7 +181,7 @@ export class CodeSearchClient {
    */
   async healthCheck(): Promise<boolean> {
     try {
-      await this.client.get('/stats');
+      await this.client.get('/api/search/stats');
       return true;
     } catch {
       return false;

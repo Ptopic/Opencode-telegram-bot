@@ -1,0 +1,8 @@
+{
+  "generateSummary": false,
+  "searchMode": "hybrid",
+  "bm25Weight": 0.25,
+  "vectorWeight": 0.35,
+  "graphWeight": 0.15,
+  "summaryWeight": 0.25
+}

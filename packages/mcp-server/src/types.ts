@@ -49,6 +49,7 @@ export interface IndexOptions {
   extensions?: Record<string, string>;
   maxFileSize?: number;
   ignorePatterns?: string[];
+  generateSummary?: boolean;
 }
 
 export interface GraphNode {
@@ -73,10 +74,12 @@ export interface DeadCodeResult {
   line?: number;
 }
 
-// API response types
+// API response types - note: API uses 'data', 'results', and 'stats' fields
 export interface ApiResponse<T> {
   success: boolean;
   data?: T;
+  results?: T;
+  stats?: T;
   error?: string;
 }
 
@@ -96,6 +99,7 @@ export interface IndexInput {
   extensions?: Record<string, string>;
   maxFileSize?: number;
   ignorePatterns?: string[];
+  generateSummary?: boolean;
 }
 
 export interface GraphSearchInput {

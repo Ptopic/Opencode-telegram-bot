@@ -33,6 +33,7 @@ interface CodeChunkRecord {
   metadata: string;
   vector: number[];
   summaryVectorJson?: string;
+  fileHash?: string;
 }
 
 interface DependencyEdgeRecord {
@@ -88,6 +89,7 @@ export class Database {
       new Field('metadata', new Utf8()),
       new Field('vector', new FixedSizeList(EMBEDDING_DIMENSIONS, new Field('', new Float32()))),
       new Field('summaryVectorJson', new Utf8(), true),
+      new Field('fileHash', new Utf8()),
     ]);
 
     const graphSchema = new Schema([
@@ -185,6 +187,25 @@ export class Database {
     summaryEmbeddings?: number[][]
   ): Promise<void> {
     if (!this.chunksTable) throw new Error('Database not initialized');
+
+    const chunksSchema = new Schema([
+      new Field('id', new Utf8()),
+      new Field('projectPath', new Utf8()),
+      new Field('filePath', new Utf8()),
+      new Field('content', new Utf8()),
+      new Field('summary', new Utf8(), true),
+      new Field('startLine', new Int32()),
+      new Field('endLine', new Int32()),
+      new Field('language', new Utf8()),
+      new Field('chunkType', new Utf8()),
+      new Field('fqn', new Utf8(), true),
+      new Field('parentId', new Utf8(), true),
+      new Field('metadata', new Utf8()),
+      new Field('vector', new FixedSizeList(EMBEDDING_DIMENSIONS, new Field('', new Float32()))),
+      new Field('summaryVectorJson', new Utf8(), true),
+      new Field('fileHash', new Utf8()),
+    ]);
+
     const records = chunks.map((chunk, i) => ({
       id: chunk.id,
       projectPath,
@@ -200,8 +221,23 @@ export class Database {
       metadata: JSON.stringify(chunk.metadata),
       vector: embeddings[i] ?? new Array(EMBEDDING_DIMENSIONS).fill(0),
       summaryVectorJson: summaryEmbeddings?.[i] ? JSON.stringify(summaryEmbeddings[i]) : null,
+      fileHash: chunk.fileHash ?? null,
     }));
-    await this.chunksTable.add(records);
+
+    try {
+      await this.chunksTable.add(records);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (errorMsg.includes('schema') || errorMsg.includes('fields did not match')) {
+        console.warn('[Database] Schema mismatch (fileHash field missing), recreating table...');
+        try { await this.db.dropTable(this.codeChunksTable); } catch {}
+        this.chunksTable = await this.db.createEmptyTable(this.codeChunksTable, chunksSchema);
+        await this.chunksTable.add(records);
+      } else {
+        throw err;
+      }
+    }
+
     try {
       await this.chunksTable.createIndex('vector', {
         config: lancedb.Index.ivfPq({}),
@@ -254,6 +290,27 @@ export class Database {
       query: '',
       highlights: [],
     }));
+  }
+
+  async getIndexedFileHashes(projectPath: string): Promise<Map<string, string>> {
+    if (!this.chunksTable) throw new Error('Database not initialized');
+
+    const hashes = new Map<string, string>();
+
+    let query = this.chunksTable.query();
+    if (projectPath) {
+      query = query.where(`projectPath = "${projectPath}"`);
+    }
+
+    const results = await query.select(['filePath', 'fileHash']).toArray();
+
+    for (const row of results) {
+      if (row.fileHash && row.filePath) {
+        hashes.set(row.filePath, row.fileHash);
+      }
+    }
+
+    return hashes;
   }
 
   async searchChunksWithSummary(

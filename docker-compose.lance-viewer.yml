@@ -1,0 +1,11 @@
+services:
+  lance-viewer:
+    image: ghcr.io/lance-format/lance-data-viewer:lancedb-0.29.2
+    environment:
+      DATA_PATH: /data
+      PORT: 8080
+    volumes:
+      - /Users/petartopic/Desktop/Petar/Opencode-telegram-bot/packages/code-search/data/code-search.db/:/data:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

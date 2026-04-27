@@ -22,7 +22,9 @@ import { projectStartCommand, projectStopCommand, projectListCommand } from "./c
 import { codeIndexCommand } from "./commands/code-index.js";
 import { codeSearchCommand } from "./commands/code-search.js";
 import { codeStatusCommand } from "./commands/code-status.js";
+import { codeConfigCommand } from "./commands/code-config.js";
 import { mcpCommand } from "./commands/mcp.js";
+import { promptCommand } from "./commands/prompt.js";
 import { helpCommand } from "./commands/help.js";
 import { clearAllInstances, getInstance, listInstances, deleteInstance, upsertInstance, upsertProject } from "./db.js";
 
@@ -795,8 +797,20 @@ if (command === "code-status") {
     process.exit(0);
 }
 
+if (command === "code-config") {
+    const [action, key, value] = args;
+    await codeConfigCommand(action, key, value);
+    process.exit(0);
+}
+
 if (command === "mcp") {
     mcpCommand();
+    process.exit(0);
+}
+
+if (command === "prompt") {
+    const targetPath = args[0];
+    await promptCommand(targetPath);
     process.exit(0);
 }
 

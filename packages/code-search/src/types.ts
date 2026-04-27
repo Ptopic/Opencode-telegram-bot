@@ -12,6 +12,7 @@ export interface CodeChunk {
   fqn?: string;
   parentId?: string;
   metadata: Record<string, unknown>;
+  fileHash?: string;
 }
 
 export interface DependencyEdge {
@@ -72,6 +73,7 @@ export interface IndexOptions {
   extensions?: Record<string, string>;
   maxFileSize?: number;
   ignorePatterns?: string[];
+  generateSummary?: boolean;
 }
 
 export interface ChunkingOptions {
@@ -99,6 +101,17 @@ export interface WatcherConfig {
   extensions?: string[];
   debounceMs?: number;
   ignorePatterns?: string[];
+}
+
+export type SearchMode = 'hybrid' | 'vector-graph' | 'vector-only';
+
+export interface GlobalCodeSearchConfig {
+  generateSummary?: boolean;
+  searchMode?: SearchMode;
+  bm25Weight?: number;
+  vectorWeight?: number;
+  graphWeight?: number;
+  summaryWeight?: number;
 }
 
 export interface ServerConfig {
