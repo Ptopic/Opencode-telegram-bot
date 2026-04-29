@@ -25,6 +25,7 @@ import { codeStatusCommand } from "./commands/code-status.js";
 import { codeConfigCommand } from "./commands/code-config.js";
 import { mcpCommand } from "./commands/mcp.js";
 import { promptCommand } from "./commands/prompt.js";
+import { modelCommand } from "./commands/model.js";
 import { helpCommand } from "./commands/help.js";
 import { clearAllInstances, getInstance, listInstances, deleteInstance, upsertInstance, upsertProject } from "./db.js";
 
@@ -811,6 +812,13 @@ if (command === "mcp") {
 if (command === "prompt") {
     const targetPath = args[0];
     await promptCommand(targetPath);
+    process.exit(0);
+}
+
+if (command === "model") {
+    const sub = args[0];
+    const modelId = args[1];
+    await modelCommand(sub, modelId);
     process.exit(0);
 }
 

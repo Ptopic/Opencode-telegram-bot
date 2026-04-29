@@ -38,6 +38,13 @@ COMMANDS
     mode list [--project <path>]       List available modes
     mode <name> [--project <path>]   Set agent mode
 
+  Model config
+    model list                          Show current SMART/NORMAL model assignments
+    model set smarter [model-id]        Pick or set the SMART model (agents: sisyphus, oracle, metis, momus, prometheus, hephaestus)
+    model set normal [model-id]         Pick or set the NORMAL model (agents: explore, librarian, atlas, sisyphus-junior, etc.)
+    model smarter [model-id]            Shortcut for 'model set smarter'
+    model normal [model-id]             Shortcut for 'model set normal'
+
   Code Search
     code-index <path> [--watch]     Index a project (start server on port 4098 first)
     code-search <query> [--limit 10]  Search indexed code
