@@ -189,17 +189,26 @@ export class CodeSearchEngine {
       debounceMs: this.config.watcher.debounceMs,
       ignorePatterns: this.config.watcher.ignorePatterns,
     });
-    this.watcher.on('change', async (filePath: string) => {
-      const { createHash } = await import('crypto');
-      const { readFile } = await import('fs/promises');
-      const content = await readFile(filePath, 'utf-8');
-      const hash = createHash('sha256').update(content).digest('hex');
-      const chunks = await this.chunker.chunkFile(filePath, hash);
-      const embeddings = await this.embedder.embedChunks(chunks);
-      await this.db.upsertChunks(chunks, embeddings, this.currentProjectPath);
-    });
+    const handleChange = async (filePath: string) => {
+      try {
+        const { createHash } = await import('crypto');
+        const { readFile } = await import('fs/promises');
+        const content = await readFile(filePath, 'utf-8');
+        const hash = createHash('sha256').update(content).digest('hex');
+        const chunks = await this.chunker.chunkFile(filePath, hash);
+        const embeddings = await this.embedder.embedChunks(chunks);
+        await this.db.upsertChunks(chunks, embeddings, this.currentProjectPath);
+        console.log(`[watch] Re-indexed: ${filePath} (${chunks.length} chunks)`);
+      } catch (err) {
+        console.error(`[watch] Failed to index ${filePath}:`, err instanceof Error ? err.message : err);
+      }
+    };
+
+    this.watcher.on('change', handleChange);
+    this.watcher.on('add', handleChange);
     this.watcher.on('unlink', (filePath: string) => {
       this.removePath(filePath);
+      console.log(`[watch] Removed: ${filePath}`);
     });
     this.watcher.start();
   }

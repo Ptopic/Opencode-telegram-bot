@@ -1,7 +1,8 @@
 /**
- * Config loader — reads ~/.opencode-telegram.json and merges with defaults.
+ * Config loader — reads ~/.opencode-telegram.json (project roots)
+ * and .opencode-telegram-config.json (all other settings).
  */
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -12,24 +13,25 @@ const REPO_ROOT = path.resolve(__dirname, "../../..");
 
 const CONFIG_PATH = path.join(homedir(), ".opencode-telegram.json");
 
-const CODE_SEARCH_CONFIG_PATH = path.join(REPO_ROOT, ".opencode-telegram-code-search.json");
+const GLOBAL_CONFIG_PATH = path.join(REPO_ROOT, ".opencode-telegram-config.json");
 
 const DEFAULT_PROJECT_ROOTS = [
   { scope: "petar", path: "/Users/petartopic/Desktop/Petar", label: "Petar" },
   { scope: "profico", path: "/Users/petartopic/Desktop/Profico", label: "Profico" },
 ];
 
-const DEFAULT_CODE_SEARCH_CONFIG = {
+const DEFAULT_GLOBAL_CONFIG = {
   generateSummary: true,
   searchMode: "hybrid",
   bm25Weight: 0.25,
   vectorWeight: 0.35,
   graphWeight: 0.15,
   summaryWeight: 0.25,
+  toolCallDisplay: false,
 };
 
 let _cached = null;
-let _codeSearchCached = null;
+let _globalCached = null;
 
 export function loadConfig() {
   if (_cached) return _cached;
@@ -57,30 +59,83 @@ export function getProjectRoots() {
   return loadConfig().projectRoots;
 }
 
-export function loadCodeSearchConfig() {
-  if (_codeSearchCached) return _codeSearchCached;
+export function loadGlobalConfig() {
+  if (_globalCached) return _globalCached;
 
-  if (!existsSync(CODE_SEARCH_CONFIG_PATH)) {
-    _codeSearchCached = { ...DEFAULT_CODE_SEARCH_CONFIG };
-    return _codeSearchCached;
+  if (!existsSync(GLOBAL_CONFIG_PATH)) {
+    _globalCached = { ...DEFAULT_GLOBAL_CONFIG };
+    return _globalCached;
   }
 
   try {
-    const raw = JSON.parse(readFileSync(CODE_SEARCH_CONFIG_PATH, "utf8"));
-    _codeSearchCached = { ...DEFAULT_CODE_SEARCH_CONFIG, ...raw };
+    const raw = JSON.parse(readFileSync(GLOBAL_CONFIG_PATH, "utf8"));
+    _globalCached = {
+      ...DEFAULT_GLOBAL_CONFIG,
+      generateSummary: raw.generateSummary === true || raw.generateSummary === false ? raw.generateSummary : true,
+      searchMode: ["hybrid", "vector-graph", "vector-only"].includes(raw.searchMode) ? raw.searchMode : "hybrid",
+      bm25Weight: typeof raw.bm25Weight === "number" ? raw.bm25Weight : 0.25,
+      vectorWeight: typeof raw.vectorWeight === "number" ? raw.vectorWeight : 0.35,
+      graphWeight: typeof raw.graphWeight === "number" ? raw.graphWeight : 0.15,
+      summaryWeight: typeof raw.summaryWeight === "number" ? raw.summaryWeight : 0.25,
+      toolCallDisplay: raw.toolCallDisplay === true,
+    };
   } catch {
-    _codeSearchCached = { ...DEFAULT_CODE_SEARCH_CONFIG };
+    _globalCached = { ...DEFAULT_GLOBAL_CONFIG };
   }
 
-  return _codeSearchCached;
+  return _globalCached;
+}
+
+export function getGlobalConfigPath() {
+  return GLOBAL_CONFIG_PATH;
+}
+
+export function setGlobalConfigValue(key, value) {
+  let raw = {};
+  if (existsSync(GLOBAL_CONFIG_PATH)) {
+    try {
+      raw = JSON.parse(readFileSync(GLOBAL_CONFIG_PATH, "utf8"));
+    } catch {}
+  }
+  raw[key] = value;
+  writeFileSync(GLOBAL_CONFIG_PATH, JSON.stringify(raw, null, 2));
+  _globalCached = null;
+  return loadGlobalConfig();
+}
+
+export function loadCodeSearchConfig() {
+  const global = loadGlobalConfig();
+  return {
+    generateSummary: global.generateSummary,
+    searchMode: global.searchMode,
+    bm25Weight: global.bm25Weight,
+    vectorWeight: global.vectorWeight,
+    graphWeight: global.graphWeight,
+    summaryWeight: global.summaryWeight,
+  };
 }
 
 export function getCodeSearchConfigPath() {
-  return CODE_SEARCH_CONFIG_PATH;
+  return GLOBAL_CONFIG_PATH;
 }
 
-/** For testsability — reset cached config */
+export function loadServerConfig() {
+  const global = loadGlobalConfig();
+  return {
+    toolCallDisplay: global.toolCallDisplay,
+  };
+}
+
+export function getServerConfigPath() {
+  return GLOBAL_CONFIG_PATH;
+}
+
+export function setServerConfigValue(key, value) {
+  return setGlobalConfigValue(key, value);
+}
+
+/** For testability — reset cached config */
 export function _clearCache() {
   _cached = null;
-  _codeSearchCached = null;
+  _globalCached = null;
 }

@@ -10,6 +10,7 @@ const DEFAULT_CONFIG = {
   vectorWeight: 0.35,
   graphWeight: 0.15,
   summaryWeight: 0.25,
+  toolCallDisplay: false,
 };
 
 const SEARCH_MODES = ["hybrid", "vector-graph", "vector-only"];
@@ -19,13 +20,15 @@ export async function codeConfigCommand(action, key, value) {
 
   if (action === "get") {
     const config = loadCodeSearchConfig();
-    console.log(`Code-Search Global Config: ${configPath}\n`);
-    console.log(`  generateSummary: ${config.generateSummary}`);
-    console.log(`  searchMode:     ${config.searchMode} (${getSearchModeDescription(config.searchMode)})`);
-    console.log(`  bm25Weight:     ${config.bm25Weight}`);
-    console.log(`  vectorWeight:   ${config.vectorWeight}`);
-    console.log(`  graphWeight:    ${config.graphWeight}`);
-    console.log(`  summaryWeight:  ${config.summaryWeight}`);
+    const serverConfig = (await import("../config.js")).loadServerConfig();
+    console.log(`Global Config: ${configPath}\n`);
+    console.log(`  generateSummary:  ${config.generateSummary}`);
+    console.log(`  searchMode:      ${config.searchMode} (${getSearchModeDescription(config.searchMode)})`);
+    console.log(`  bm25Weight:      ${config.bm25Weight}`);
+    console.log(`  vectorWeight:    ${config.vectorWeight}`);
+    console.log(`  graphWeight:     ${config.graphWeight}`);
+    console.log(`  summaryWeight:   ${config.summaryWeight}`);
+    console.log(`  toolCallDisplay: ${serverConfig.toolCallDisplay}`);
     console.log();
     return;
   }
@@ -33,13 +36,13 @@ export async function codeConfigCommand(action, key, value) {
   if (action === "set") {
     if (!key) {
       console.error("Usage: opencode-telegram code-config set <key> <value>");
-      console.error("Keys: generateSummary, searchMode, bm25Weight, vectorWeight, graphWeight, summaryWeight");
+      console.error("Keys: generateSummary, searchMode, bm25Weight, vectorWeight, graphWeight, summaryWeight, toolCallDisplay");
       process.exit(1);
     }
 
-    if (!["generateSummary", "searchMode", "bm25Weight", "vectorWeight", "graphWeight", "summaryWeight"].includes(key)) {
+    if (!["generateSummary", "searchMode", "bm25Weight", "vectorWeight", "graphWeight", "summaryWeight", "toolCallDisplay"].includes(key)) {
       console.error(`Unknown key: ${key}`);
-      console.error("Valid keys: generateSummary, searchMode, bm25Weight, vectorWeight, graphWeight, summaryWeight");
+      console.error("Valid keys: generateSummary, searchMode, bm25Weight, vectorWeight, graphWeight, summaryWeight, toolCallDisplay");
       process.exit(1);
     }
 
@@ -57,6 +60,11 @@ export async function codeConfigCommand(action, key, value) {
       process.exit(1);
     }
 
+    if (key === "toolCallDisplay" && !["true", "false"].includes(value)) {
+      console.error("toolCallDisplay must be true or false");
+      process.exit(1);
+    }
+
     if (["bm25Weight", "vectorWeight", "graphWeight", "summaryWeight"].includes(key)) {
       const num = parseFloat(value);
       if (isNaN(num) || num < 0 || num > 1) {
@@ -64,7 +72,7 @@ export async function codeConfigCommand(action, key, value) {
         process.exit(1);
       }
       value = num;
-    } else if (key === "generateSummary") {
+    } else if (key === "generateSummary" || key === "toolCallDisplay") {
       value = value === "true";
     }
 

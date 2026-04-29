@@ -780,7 +780,7 @@ if (command === "code-index" || command === "index") {
     const remaining = args.filter((a) => a !== "--watch");
     const projectPath = remaining[0];
     await codeIndexCommand(projectPath, { watch });
-    process.exit(0);
+    if (!watch) process.exit(0);
 }
 
 if (command === "code-search") {
@@ -819,6 +819,36 @@ if (command === "model") {
     const sub = args[0];
     const modelId = args[1];
     await modelCommand(sub, modelId);
+    process.exit(0);
+}
+
+if (command === "config") {
+    const { loadGlobalConfig, setGlobalConfigValue, getGlobalConfigPath } = await import("./config.js");
+    const sub = args[0];
+    if (sub === "get") {
+        const cfg = loadGlobalConfig();
+        console.log(`\n  Global config: ${getGlobalConfigPath()}\n`);
+        console.log(`  generateSummary:  ${cfg.generateSummary}`);
+        console.log(`  searchMode:       ${cfg.searchMode}`);
+        console.log(`  toolCallDisplay:  ${cfg.toolCallDisplay}`);
+        console.log(`  (When true, tool call messages are sent in /watch SSE streams)\n`);
+    } else if (sub === "tool-call-display" || sub === "toolcalldisplay") {
+        const val = args[1];
+        if (val === "on" || val === "true" || val === "1") {
+            setGlobalConfigValue("toolCallDisplay", true);
+            console.log("\n  toolCallDisplay: on");
+        } else if (val === "off" || val === "false" || val === "0") {
+            setGlobalConfigValue("toolCallDisplay", false);
+            console.log("\n  toolCallDisplay: off");
+        } else {
+            console.error("Usage: opencode-telegram config tool-call-display <on|off>");
+            process.exit(1);
+        }
+    } else {
+        console.error("Usage: opencode-telegram config get");
+        console.error("       opencode-telegram config tool-call-display <on|off>");
+        process.exit(1);
+    }
     process.exit(0);
 }
 

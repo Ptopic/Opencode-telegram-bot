@@ -79,11 +79,36 @@ export async function codeIndexCommand(projectPath, options = {}) {
   }
 
   if (options.watch) {
-    console.log(`Starting file watcher for: ${normalizedPath}`);
+    console.log(`Indexing: ${normalizedPath}\n`);
+
+    const startTime = Date.now();
+    try {
+      const response = await axios.post(
+        `${BASE_URL}/api/search/index`,
+        { paths: [normalizedPath] },
+        { timeout: 600_000, maxContentLength: Infinity, maxBodyLength: Infinity }
+      );
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      const { stats } = response.data;
+      console.log(`\n✅ Initial index complete in ${elapsed}s (${stats.totalChunks.toLocaleString()} chunks)`);
+    } catch (err) {
+      if (err.code === "ECONNREFUSED") {
+        console.error(`Error: Cannot connect to code-search server at ${BASE_URL}`);
+        console.error("Make sure the code-search server is running:");
+        console.error("  cd packages/code-search && pnpm dev");
+        process.exit(1);
+      }
+      console.error(`Initial indexing failed: ${err?.response?.data?.error ?? err.message}`);
+      process.exit(1);
+    }
+
     try {
       await axios.post(`${BASE_URL}/api/search/watch/start`, { paths: [normalizedPath] });
-      console.log("File watcher started. Press Ctrl+C to stop.");
+      console.log(`\n👀 Watching for changes in: ${normalizedPath}`);
+      console.log("   Changed files will be re-indexed automatically.");
+      console.log("   Press Ctrl+C to stop.\n");
       process.stdin.resume();
+      await new Promise(() => {});
       return;
     } catch (err) {
       if (err.code === "ECONNREFUSED") {

@@ -47,6 +47,8 @@ COMMANDS
 
   Code Search
     code-index <path> [--watch]     Index a project (start server on port 4098 first)
+    index <path> [--watch]          Shortcut for code-index
+                                    --watch: index then auto-reindex on file changes
     code-search <query> [--limit 10]  Search indexed code
     code-status                       Show index statistics
 
@@ -57,6 +59,8 @@ COMMANDS
     kill-all            Stop all OpenCode server instances
 
   Utility
+    config get                           Show server config
+    config tool-call-display <on|off>    Toggle tool call messages in /watch SSE streams
     help              Show this help text
 
 EXAMPLES

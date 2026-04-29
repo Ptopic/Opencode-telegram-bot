@@ -22,6 +22,7 @@ import {
   setActiveSession,
   setMode as dbSetMode,
 } from "./db.js";
+import { loadServerConfig } from "./config.js";
 
 function jsonResponse(res, statusCode, data) {
   res.writeHead(statusCode, {
@@ -51,6 +52,8 @@ function parseBody(req) {
     req.on("error", reject);
   });
 }
+
+console.log("This is a test for code search");
 
 async function handleRequest(req, res) {
   // CORS preflight
@@ -109,7 +112,12 @@ async function handleRequest(req, res) {
 
       return jsonResponse(res, 200, {
         instances: result,
-        projectRoots: projects.map((p) => ({ type: "root", scope: p.scope, path: p.path, label: p.label })),
+        projectRoots: projects.map((p) => ({
+          type: "root",
+          scope: p.scope,
+          path: p.path,
+          label: p.label,
+        })),
       });
     }
 
@@ -118,8 +126,17 @@ async function handleRequest(req, res) {
       try {
         const projects = await listProjects();
         const instances = await listInstances();
-        const _debug = { projectsCount: projects?.length ?? -1, instancesCount: instances?.length ?? -1, instances };
-        const result = projects.map((p) => ({ type: "root", scope: p.scope, path: p.path, label: p.label }));
+        const _debug = {
+          projectsCount: projects?.length ?? -1,
+          instancesCount: instances?.length ?? -1,
+          instances,
+        };
+        const result = projects.map((p) => ({
+          type: "root",
+          scope: p.scope,
+          path: p.path,
+          label: p.label,
+        }));
         // Include running instances that aren't already in projectRoots
         const rootPaths = new Set(result.map((p) => p.path));
         for (const inst of instances) {
@@ -151,7 +168,9 @@ async function handleRequest(req, res) {
 
     // ── GET /sessions/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/sessions/") && method === "GET") {
-      const projectPath = decodeURIComponent(pathname.slice("/sessions/".length));
+      const projectPath = decodeURIComponent(
+        pathname.slice("/sessions/".length),
+      );
       const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {
@@ -170,7 +189,11 @@ async function handleRequest(req, res) {
     }
 
     // ── POST /sessions/:project/new ────────────────────────────────────────
-    if (pathname.startsWith("/sessions/") && pathname.endsWith("/new") && method === "POST") {
+    if (
+      pathname.startsWith("/sessions/") &&
+      pathname.endsWith("/new") &&
+      method === "POST"
+    ) {
       const parts = pathname.slice("/sessions/".length).split("/");
       parts.pop(); // remove "new"
       const projectPath = decodeURIComponent(parts.join("/"));
@@ -202,7 +225,8 @@ async function handleRequest(req, res) {
       const body = await parseBody(req);
       const { project: projectPath, sessionId, prompt, agent } = body;
 
-      if (!prompt) return errorResponse(res, 400, "Missing 'prompt' in request body");
+      if (!prompt)
+        return errorResponse(res, 400, "Missing 'prompt' in request body");
 
       const instance = await getInstance(projectPath);
 
@@ -215,14 +239,20 @@ async function handleRequest(req, res) {
 
       if (!targetSessionId) {
         const sessions = await listSessions(instance.base_url);
-        if (!sessions.length) return errorResponse(res, 404, "No sessions found");
+        if (!sessions.length)
+          return errorResponse(res, 404, "No sessions found");
         targetSessionId = sessions[sessions.length - 1].id;
       }
 
       // Auto-use saved mode unless caller explicitly passed one
       const effectiveAgent = agent ?? sessionData.mode ?? null;
 
-      const reply = await sendPrompt(instance.base_url, targetSessionId, prompt, effectiveAgent);
+      const reply = await sendPrompt(
+        instance.base_url,
+        targetSessionId,
+        prompt,
+        effectiveAgent,
+      );
 
       return jsonResponse(res, 200, {
         projectPath,
@@ -237,7 +267,9 @@ async function handleRequest(req, res) {
     // Forwards to: POST {workspace_base_url}/session/{sessionId}/message
     // Returns 202 immediately; workspace processes async.
     if (pathname.match(/^\/session\/([^/]+)\/message$/) && method === "POST") {
-      const sessionId = pathname.replace(/^\/session\//, "").replace(/\/message$/, "");
+      const sessionId = pathname
+        .replace(/^\/session\//, "")
+        .replace(/\/message$/, "");
       const body = await parseBody(req);
 
       const projectPath = body.project ?? null;
@@ -257,19 +289,30 @@ async function handleRequest(req, res) {
 
       // Fire-and-forget: don't await the workspace response.
       // Detach the request so the proxy returns 202 immediately.
-      const proxyReq = http.request(`${instance.base_url}/session/${sessionId}/message`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      }, (proxyRes) => {
-        // Discard workspace response — we don't need it
-        proxyRes.on("data", () => {});
-        proxyRes.on("end", () => {});
-      });
+      const proxyReq = http.request(
+        `${instance.base_url}/session/${sessionId}/message`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+        },
+        (proxyRes) => {
+          // Discard workspace response — we don't need it
+          proxyRes.on("data", () => {});
+          proxyRes.on("end", () => {});
+        },
+      );
       proxyReq.on("error", () => {});
       proxyReq.write(JSON.stringify(payload));
       proxyReq.end();
       // Don't wait — let the proxy return while workspace processes in background
-      return jsonResponse(res, 202, { ok: true, sessionId, message: "Prompt sent" });
+      return jsonResponse(res, 202, {
+        ok: true,
+        sessionId,
+        message: "Prompt sent",
+      });
     }
 
     // ── GET /watch/:project ────────────────────────────────────────────────
@@ -295,25 +338,39 @@ async function handleRequest(req, res) {
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
+        Connection: "keep-alive",
         "Access-Control-Allow-Origin": "*",
       });
 
       let seenCount = 0;
-      const intervalMs = parseInt(url.searchParams.get("interval") ?? "2000", 10);
+      const intervalMs = parseInt(
+        url.searchParams.get("interval") ?? "2000",
+        10,
+      );
 
       let emptyPolls = 0;
       const MAX_EMPTY_POLLS = 5;
       const emittedPermissionIds = new Set();
+      const showToolCalls = loadServerConfig().toolCallDisplay === true;
 
       const interval = setInterval(async () => {
         try {
-          const messages = await getSessionMessages(instance.base_url, sessionId);
+          const messages = await getSessionMessages(
+            instance.base_url,
+            sessionId,
+          );
 
           if (messages.length > seenCount) {
             const newMessages = messages.slice(seenCount);
             for (const msg of newMessages) {
-              const data = JSON.stringify({ type: "message", role: getMessageRole(msg), parts: getMessageParts(msg), ts: msg.ts });
+              const role = getMessageRole(msg);
+              if (!showToolCalls && role === "tool") continue;
+              const data = JSON.stringify({
+                type: "message",
+                role,
+                parts: getMessageParts(msg),
+                ts: msg.ts,
+              });
               res.write(`data: ${data}\n\n`);
             }
             seenCount = messages.length;
@@ -327,10 +384,13 @@ async function handleRequest(req, res) {
             });
             if (permRes.ok) {
               const permPayload = await permRes.json();
-              const pending = Array.isArray(permPayload) ? permPayload
-                : Array.isArray(permPayload?.permissions) ? permPayload.permissions
-                : Array.isArray(permPayload?.pending) ? permPayload.pending
-                : [];
+              const pending = Array.isArray(permPayload)
+                ? permPayload
+                : Array.isArray(permPayload?.permissions)
+                  ? permPayload.permissions
+                  : Array.isArray(permPayload?.pending)
+                    ? permPayload.pending
+                    : [];
               for (const perm of pending) {
                 const permId = perm?.id ?? perm?.permissionID ?? null;
                 if (!permId || emittedPermissionIds.has(permId)) continue;
@@ -354,12 +414,16 @@ async function handleRequest(req, res) {
           if (messages.length <= seenCount) {
             emptyPolls++;
             if (emptyPolls >= MAX_EMPTY_POLLS && seenCount > 0) {
-              res.write(`data: ${JSON.stringify({ type: "done", isFinished: false, reason: "timeout" })}\n\n`);
+              res.write(
+                `data: ${JSON.stringify({ type: "done", isFinished: false, reason: "timeout" })}\n\n`,
+              );
               clearInterval(interval);
               res.end();
               return;
             } else if (emptyPolls > 0 && emptyPolls < MAX_EMPTY_POLLS) {
-              res.write(`data: ${JSON.stringify({ type: "done", isFinished: false })}\n\n`);
+              res.write(
+                `data: ${JSON.stringify({ type: "done", isFinished: false })}\n\n`,
+              );
             }
           }
         } catch (err) {
@@ -379,7 +443,9 @@ async function handleRequest(req, res) {
     // the session is truly finished (vs the polling-based /watch/:project
     // which can premature-close when OpenCode adds follow-up user messages).
     if (pathname.startsWith("/watch-native/") && method === "GET") {
-      const projectPath = decodeURIComponent(pathname.slice("/watch-native/".length));
+      const projectPath = decodeURIComponent(
+        pathname.slice("/watch-native/".length),
+      );
       const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {
@@ -399,11 +465,12 @@ async function handleRequest(req, res) {
       res.writeHead(200, {
         "Content-Type": "text/event-stream",
         "Cache-Control": "no-cache",
-        "Connection": "keep-alive",
+        Connection: "keep-alive",
         "Access-Control-Allow-Origin": "*",
       });
 
       let finished = false;
+      const showToolCalls = loadServerConfig().toolCallDisplay === true;
 
       const sessionFilter = (event) => {
         // Match events for our session — sessionID may be at top level or nested
@@ -458,7 +525,9 @@ async function handleRequest(req, res) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
-                buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+                buffer += decoder
+                  .decode(value, { stream: true })
+                  .replace(/\r\n/g, "\n");
                 const frames = buffer.split("\n\n");
                 buffer = frames.pop() ?? "";
 
@@ -467,12 +536,16 @@ async function handleRequest(req, res) {
                   const event = parseSseFrame(frame);
                   if (!event) continue;
 
-                  const eventType = typeof event.type === "string" ? event.type : "";
+                  const eventType =
+                    typeof event.type === "string" ? event.type : "";
 
                   if (eventType === "session.idle" && sessionFilter(event)) {
                     if (!finished) {
                       finished = true;
-                      const data = JSON.stringify({ type: "done", isFinished: true });
+                      const data = JSON.stringify({
+                        type: "done",
+                        isFinished: true,
+                      });
                       res.write(`data: ${data}\n\n`);
                       // Don't close immediately - session.idle may arrive before all
                       // message events have been forwarded. Close after buffer drains
@@ -498,8 +571,14 @@ async function handleRequest(req, res) {
                       id: props.id ?? props.permissionID ?? null,
                       sessionID: props.sessionID ?? props.sessionId ?? null,
                       permission: props.permission ?? null,
-                      patterns: Array.isArray(props.patterns) ? props.patterns : [],
-                      tool: props.tool ?? props.toolName ?? props.permission ?? null,
+                      patterns: Array.isArray(props.patterns)
+                        ? props.patterns
+                        : [],
+                      tool:
+                        props.tool ??
+                        props.toolName ??
+                        props.permission ??
+                        null,
                       metadata: props.metadata ?? {},
                     };
                     const data = JSON.stringify(permEvent);
@@ -520,14 +599,34 @@ async function handleRequest(req, res) {
                     continue;
                   }
 
-                  const data = JSON.stringify({ type: eventType || "event", payload: event });
+                  if (!showToolCalls) {
+                    const msgRole =
+                      event?.properties?.message?.role ?? event?.role ?? "";
+                    if (
+                      typeof msgRole === "string" &&
+                      msgRole.toLowerCase() === "tool"
+                    )
+                      continue;
+                  }
+
+                  const data = JSON.stringify({
+                    type: eventType || "event",
+                    payload: event,
+                  });
                   res.write(`data: ${data}\n\n`);
                 }
               }
             } catch (err) {
               if (finished) return;
-              console.warn("Native event stream error, retrying in", retryDelay, err.message);
-              const data = JSON.stringify({ type: "error", message: `stream error: ${err.message}, retrying...` });
+              console.warn(
+                "Native event stream error, retrying in",
+                retryDelay,
+                err.message,
+              );
+              const data = JSON.stringify({
+                type: "error",
+                message: `stream error: ${err.message}, retrying...`,
+              });
               res.write(`data: ${data}\n\n`);
               await new Promise((r) => setTimeout(r, retryDelay));
               retryDelay = Math.min(retryDelay * 2, maxRetryDelay);
@@ -552,7 +651,7 @@ async function handleRequest(req, res) {
           close() {
             if (!res.writableEnded) res.end();
           },
-        })
+        }),
       );
 
       req.on("close", () => {
@@ -569,7 +668,10 @@ async function handleRequest(req, res) {
       const instances = await listInstances();
       let baseUrl = null;
       for (const inst of instances) {
-        if (inst?.status === "ready") { baseUrl = inst.base_url; break; }
+        if (inst?.status === "ready") {
+          baseUrl = inst.base_url;
+          break;
+        }
       }
       if (!baseUrl) return errorResponse(res, 500, "No healthy instance");
 
@@ -592,7 +694,11 @@ async function handleRequest(req, res) {
           const lines = buf.split("\n");
           buf = lines.pop() ?? "";
           for (const l of lines) {
-            if (l.startsWith("data:") || l.startsWith("event:") || l.startsWith("id:")) {
+            if (
+              l.startsWith("data:") ||
+              l.startsWith("event:") ||
+              l.startsWith("id:")
+            ) {
               res.write(`${l}\n`);
             }
           }
@@ -612,7 +718,10 @@ async function handleRequest(req, res) {
       const instances = await listInstances();
       let baseUrl = null;
       for (const inst of instances) {
-        if (inst?.status === "ready") { baseUrl = inst.base_url; break; }
+        if (inst?.status === "ready") {
+          baseUrl = inst.base_url;
+          break;
+        }
       }
       if (!baseUrl) return errorResponse(res, 500, "No healthy instance");
 
@@ -639,7 +748,12 @@ async function handleRequest(req, res) {
           const lines = buf.split("\n");
           buf = lines.pop() ?? "";
           for (const l of lines) {
-            if (l.startsWith("data:") || l.startsWith("event:") || l.startsWith("id:") || l.trim()) {
+            if (
+              l.startsWith("data:") ||
+              l.startsWith("event:") ||
+              l.startsWith("id:") ||
+              l.trim()
+            ) {
               res.write(`${l}\n`);
             }
           }
@@ -663,12 +777,22 @@ async function handleRequest(req, res) {
         return errorResponse(res, 404, "No running instance for this project");
       }
       const modes = await listModes(instance.base_url);
-      return jsonResponse(res, 200, { projectPath, baseUrl: instance.base_url, modes });
+      return jsonResponse(res, 200, {
+        projectPath,
+        baseUrl: instance.base_url,
+        modes,
+      });
     }
 
     // ── POST /modes/:project/mode ────────────────────────────────────────
-    if (pathname.startsWith("/modes/") && pathname.endsWith("/mode") && method === "POST") {
-      const projectPath = decodeURIComponent(pathname.slice("/modes/".length, -5)); // strip "/mode"
+    if (
+      pathname.startsWith("/modes/") &&
+      pathname.endsWith("/mode") &&
+      method === "POST"
+    ) {
+      const projectPath = decodeURIComponent(
+        pathname.slice("/modes/".length, -5),
+      ); // strip "/mode"
       const body = await parseBody(req);
       const instance = await getInstance(projectPath);
       if (!instance || instance.status !== "ready") {
@@ -686,7 +810,11 @@ async function handleRequest(req, res) {
       if (!isNaN(modeIndex) && modeIndex >= 0) {
         const modes = await listModes(instance.base_url);
         if (modeIndex >= modes.length) {
-          return errorResponse(res, 400, `Mode index ${modeIndex} out of range (0-${modes.length - 1})`);
+          return errorResponse(
+            res,
+            400,
+            `Mode index ${modeIndex} out of range (0-${modes.length - 1})`,
+          );
         }
         resolvedMode = modes[modeIndex].name;
       }
@@ -694,7 +822,12 @@ async function handleRequest(req, res) {
       await setMode(instance.base_url, sessionId, resolvedMode);
       await dbSetMode(projectPath, resolvedMode);
 
-      return jsonResponse(res, 200, { ok: true, mode: resolvedMode, sessionId, index: modeIndex });
+      return jsonResponse(res, 200, {
+        ok: true,
+        mode: resolvedMode,
+        sessionId,
+        index: modeIndex,
+      });
     }
 
     // ── POST /permission/respond ──────────────────────────────────────────
@@ -705,10 +838,16 @@ async function handleRequest(req, res) {
       const body = await parseBody(req);
       const { project: projectPath, requestID, reply, message } = body;
 
-      if (!projectPath) return errorResponse(res, 400, "Missing 'project' in request body");
-      if (!requestID) return errorResponse(res, 400, "Missing 'requestID' in request body");
+      if (!projectPath)
+        return errorResponse(res, 400, "Missing 'project' in request body");
+      if (!requestID)
+        return errorResponse(res, 400, "Missing 'requestID' in request body");
       if (!["once", "always", "reject"].includes(reply)) {
-        return errorResponse(res, 400, "Invalid 'reply' — must be \"once\", \"always\", or \"reject\"");
+        return errorResponse(
+          res,
+          400,
+          'Invalid \'reply\' — must be "once", "always", or "reject"',
+        );
       }
 
       const instance = await getInstance(projectPath);
@@ -718,22 +857,33 @@ async function handleRequest(req, res) {
 
       try {
         const replyPayload = { reply, ...(message ? { message } : {}) };
-        const replyRes = await fetch(`${instance.base_url}/permission/${encodeURIComponent(requestID)}/reply`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(replyPayload),
-          signal: AbortSignal.timeout(10000),
-        });
+        const replyRes = await fetch(
+          `${instance.base_url}/permission/${encodeURIComponent(requestID)}/reply`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(replyPayload),
+            signal: AbortSignal.timeout(10000),
+          },
+        );
 
         if (!replyRes.ok) {
           const errText = await replyRes.text().catch(() => "");
-          return errorResponse(res, replyRes.status, `OpenCode permission reply failed: ${errText}`);
+          return errorResponse(
+            res,
+            replyRes.status,
+            `OpenCode permission reply failed: ${errText}`,
+          );
         }
 
         const result = await replyRes.json().catch(() => ({}));
         return jsonResponse(res, 200, { ok: true, requestID, reply, result });
       } catch (err) {
-        return errorResponse(res, 502, `Failed to reach OpenCode: ${err.message}`);
+        return errorResponse(
+          res,
+          502,
+          `Failed to reach OpenCode: ${err.message}`,
+        );
       }
     }
 
@@ -760,7 +910,8 @@ async function handleRequest(req, res) {
     if (pathname === "/project/start" && method === "POST") {
       const body = await parseBody(req);
       const { project: projectPath } = body;
-      if (!projectPath) return errorResponse(res, 400, "Missing 'project' in request body");
+      if (!projectPath)
+        return errorResponse(res, 400, "Missing 'project' in request body");
 
       try {
         const { projectStartCommand } = await import("./commands/project.js");
@@ -769,10 +920,21 @@ async function handleRequest(req, res) {
         return jsonResponse(res, 200, {
           ok: true,
           projectPath,
-          instance: instance ? { baseUrl: instance.base_url, port: instance.port, pid: instance.pid, status: instance.status } : null,
+          instance: instance
+            ? {
+                baseUrl: instance.base_url,
+                port: instance.port,
+                pid: instance.pid,
+                status: instance.status,
+              }
+            : null,
         });
       } catch (err) {
-        return errorResponse(res, 500, `Failed to start project: ${err.message}`);
+        return errorResponse(
+          res,
+          500,
+          `Failed to start project: ${err.message}`,
+        );
       }
     }
 
@@ -780,103 +942,144 @@ async function handleRequest(req, res) {
     if (pathname === "/project/stop" && method === "POST") {
       const body = await parseBody(req);
       const { project: projectPath } = body;
-      if (!projectPath) return errorResponse(res, 400, "Missing 'project' in request body");
+      if (!projectPath)
+        return errorResponse(res, 400, "Missing 'project' in request body");
 
       try {
         const { projectStopCommand } = await import("./commands/project.js");
         await projectStopCommand(projectPath);
         return jsonResponse(res, 200, { ok: true, projectPath });
       } catch (err) {
-        return errorResponse(res, 500, `Failed to stop project: ${err.message}`);
+        return errorResponse(
+          res,
+          500,
+          `Failed to stop project: ${err.message}`,
+        );
       }
     }
 
     // ── Code Search Proxy Routes ────────────────────────────────────────────
     // Proxy /api/search/* → code-search server at localhost:4098
 
-    if (pathname.startsWith('/api/search/') && method === 'POST') {
+    if (pathname.startsWith("/api/search/") && method === "POST") {
       const codeSearchBody = await parseBody(req);
-      const targetPath = pathname.slice('/api'.length); // /search/index → /api/search/index
+      const targetPath = pathname.slice("/api".length); // /search/index → /api/search/index
       try {
         const csRes = await fetch(`http://localhost:4098${targetPath}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(codeSearchBody),
           signal: AbortSignal.timeout(300_000),
         });
         const data = await csRes.json();
         return jsonResponse(res, csRes.status, data);
       } catch (err) {
-        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+        return errorResponse(
+          res,
+          502,
+          `Code-search server unreachable: ${err.message}`,
+        );
       }
     }
 
-    if (pathname === '/api/search/stats' && method === 'GET') {
-      const projectPath = url.searchParams.get('projectPath') ?? '';
+    if (pathname === "/api/search/stats" && method === "GET") {
+      const projectPath = url.searchParams.get("projectPath") ?? "";
       try {
-        const csRes = await fetch(`http://localhost:4098/api/search/stats?projectPath=${encodeURIComponent(projectPath)}`);
+        const csRes = await fetch(
+          `http://localhost:4098/api/search/stats?projectPath=${encodeURIComponent(projectPath)}`,
+        );
         const data = await csRes.json();
         return jsonResponse(res, csRes.status, data);
       } catch (err) {
-        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+        return errorResponse(
+          res,
+          502,
+          `Code-search server unreachable: ${err.message}`,
+        );
       }
     }
 
-    if (pathname.startsWith('/api/search/index/') && method === 'DELETE') {
-      const pathToRemove = pathname.slice('/api/search/index/'.length);
+    if (pathname.startsWith("/api/search/index/") && method === "DELETE") {
+      const pathToRemove = pathname.slice("/api/search/index/".length);
       try {
-        const csRes = await fetch(`http://localhost:4098/api/search/index/${pathToRemove}`, {
-          method: 'DELETE',
-        });
+        const csRes = await fetch(
+          `http://localhost:4098/api/search/index/${pathToRemove}`,
+          {
+            method: "DELETE",
+          },
+        );
         const data = await csRes.json();
         return jsonResponse(res, csRes.status, data);
       } catch (err) {
-        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+        return errorResponse(
+          res,
+          502,
+          `Code-search server unreachable: ${err.message}`,
+        );
       }
     }
 
-    if (pathname === '/api/search/watch/start' && method === 'POST') {
+    if (pathname === "/api/search/watch/start" && method === "POST") {
       const codeSearchBody = await parseBody(req);
       try {
-        const csRes = await fetch('http://localhost:4098/api/search/watch/start', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(codeSearchBody),
-        });
+        const csRes = await fetch(
+          "http://localhost:4098/api/search/watch/start",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(codeSearchBody),
+          },
+        );
         const data = await csRes.json();
         return jsonResponse(res, csRes.status, data);
       } catch (err) {
-        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+        return errorResponse(
+          res,
+          502,
+          `Code-search server unreachable: ${err.message}`,
+        );
       }
     }
 
-    if (pathname === '/api/search/watch/stop' && method === 'POST') {
+    if (pathname === "/api/search/watch/stop" && method === "POST") {
       try {
-        const csRes = await fetch('http://localhost:4098/api/search/watch/stop', {
-          method: 'POST',
-        });
+        const csRes = await fetch(
+          "http://localhost:4098/api/search/watch/stop",
+          {
+            method: "POST",
+          },
+        );
         const data = await csRes.json();
         return jsonResponse(res, csRes.status, data);
       } catch (err) {
-        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+        return errorResponse(
+          res,
+          502,
+          `Code-search server unreachable: ${err.message}`,
+        );
       }
     }
 
     // Graph routes
-    if (pathname.startsWith('/api/graph/') && method === 'GET') {
-      const targetPath = pathname.slice('/api'.length);
+    if (pathname.startsWith("/api/graph/") && method === "GET") {
+      const targetPath = pathname.slice("/api".length);
       try {
-        const csRes = await fetch(`http://localhost:4098${targetPath}${url.search}`);
+        const csRes = await fetch(
+          `http://localhost:4098${targetPath}${url.search}`,
+        );
         const data = await csRes.json();
         return jsonResponse(res, csRes.status, data);
       } catch (err) {
-        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+        return errorResponse(
+          res,
+          502,
+          `Code-search server unreachable: ${err.message}`,
+        );
       }
     }
 
     // ── 404 ────────────────────────────────────────────────────────────────
     return errorResponse(res, 404, `Unknown route: ${method} ${pathname}`);
-
   } catch (err) {
     console.error("Server error:", err);
     return errorResponse(res, 500, err.message ?? "Internal error");
@@ -906,12 +1109,18 @@ function getMessageParts(msg) {
       .filter((p) => p && typeof p === "object")
       .map((p) => ({
         type: typeof p.type === "string" ? p.type : "text",
-        text: typeof p.text === "string" ? p.text : typeof p.content === "string" ? p.content : "",
+        text:
+          typeof p.text === "string"
+            ? p.text
+            : typeof p.content === "string"
+              ? p.content
+              : "",
       }));
   }
   for (const key of ["text", "content", "message", "response", "reply"]) {
     const val = msg?.[key];
-    if (typeof val === "string" && val.trim()) return [{ type: "text", text: val.trim() }];
+    if (typeof val === "string" && val.trim())
+      return [{ type: "text", text: val.trim() }];
   }
   return [];
 }
@@ -932,9 +1141,13 @@ export function startServer(port = 4097, { watch = false } = {}) {
     console.log("  GET  /projects            — project roots");
     console.log("  GET  /sessions/:project   — list sessions");
     console.log("  POST /sessions/:project/new — create session");
-    console.log("  POST /send                — send prompt { project, prompt, sessionId? }");
+    console.log(
+      "  POST /send                — send prompt { project, prompt, sessionId? }",
+    );
     console.log("  GET  /watch/:project      — SSE stream of messages");
-    console.log("  POST /stop                — abort session { project, sessionId? }");
+    console.log(
+      "  POST /stop                — abort session { project, sessionId? }",
+    );
     if (watch) {
       console.log("\n🔁 Watch mode enabled — restarting on file changes...");
       startFileWatcher().catch(console.error);
@@ -953,7 +1166,13 @@ async function startFileWatcher() {
   const path = req("node:path");
   const { fileURLToPath } = req("node:url");
 
-  const repoRoot = path.resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..");
+  const repoRoot = path.resolve(
+    fileURLToPath(import.meta.url),
+    "..",
+    "..",
+    "..",
+    "..",
+  );
   const watchDir = path.join(repoRoot, "packages", "cli", "src");
   let debounceTimer = null;
 
