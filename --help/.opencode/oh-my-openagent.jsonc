@@ -1,6 +1,23 @@
 {
   "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/master/assets/oh-my-openagent.schema.json",
 
+  // ─── Model Assignment Strategy ───
+  //
+  // SMART (GLM 5.1 = synthetic/hf:zai-org/GLM-5.1):
+  //   - Communicators: Sisyphus, Metis (follow complex multi-step prompts, orchestrate)
+  //   - Deep Specialists: Oracle, Momus, Prometheus, Hephaestus (architecture, debugging, deep reasoning)
+  //
+  // NORMAL/FAST (MiniMax M2.7 = minimax-coding-plan/MiniMax-M2.7-highspeed):
+  //   - Utility Runners: Explore, Librarian, Multimodal-Looker (grep/search/retrieval, speed > intelligence)
+  //   - Coordinators: Atlas, Sisyphus-Junior, General (todo orchestration, category execution, utility)
+  //
+  // Rationale from official agent-model-matching guide:
+  //   - "Don't upgrade Explore/Librarian to Opus — that's hiring a senior engineer to file paperwork"
+  //   - Sisyphus needs Claude/GLM-like models for complex ~1,100-line prompt following
+  //   - Oracle/Momus need deep reasoning for architecture consultation and plan review
+  //   - Hephaestus needs principle-driven autonomous execution
+  //
+
   "mcp": {
     "code-search": {
       "type": "local",
@@ -26,6 +43,7 @@
   },
 
   "agents": {
+    // SMART — Main orchestrator. Follows ~1,100-line prompts, delegates, coordinates.
     "sisyphus": {
       "model": "synthetic/hf:zai-org/GLM-5.1",
       "tools": {
@@ -40,6 +58,7 @@
       "prompt_append": "\n\n## Tool policy\nYou MUST use only code-search and read tools for ALL code discovery. NEVER use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash search, or any shell-based discovery tools. If code must be located, first use code_search_code_search, then use read for file contents. When delegating tasks to subagents, always instruct them to use only code-search and read tools - never allow glob, grep, bash, find, ast_grep_search, ast_grep_replace, or similar search tools.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only\n\n## Context: JournalistBoost codebase\nThis is a Next.js 15 application with TypeScript, Tailwind CSS, Drizzle ORM with PostgreSQL, and Supabase auth. Project structure:\n- src/app/ - Next.js App Router with route groups (folders in parentheses)\n- src/components/ - Reusable React UI components\n- src/hooks/ - Custom React hooks for logic separation\n- src/repo/ - Drizzle ORM schema and database access\n- src/services/ - Business logic and external integrations\n- src/lib/ - Provider classes and utilities\n- src/types/ - TypeScript type definitions\n- src/utils/ - Helper functions\n\nRoute groups: (articleWriterFeature), (personProfileFeature), (commonFeature)\nKey features: ArticleWriter, PersonProfiles, NewsScraper with RSS management\nBackground jobs: BullMQ with Redis queues: rssPaywall, articleCommit, transcriptProcessing, etc.\n\n## Workflow\n1. For code lookup: Use code-search_code_search first, then read specific files\n2. For understanding code: Use code-search_code_graph_* tools for dependency analysis\n3. Never default to grep/glob - code-search provides semantic understanding\n4. When delegating: Explicitly instruct subagents to use only code-search and read",
     },
 
+    // NORMAL — Ultrawork mode: high-speed parallel execution when user says "ultrawork"
     "ultrawork": {
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
       "tools": {
@@ -53,6 +72,7 @@
       "prompt_append": "\n\n## Tool policy\nUse ONLY code-search and read tools for repository inspection. NEVER use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based discovery. Translate every code lookup need into a code_search query first. If code-search returns insufficient results, use read on specific file paths, never search with shell tools.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only\n\n## Context: JournalistBoost codebase\nThis is a Next.js 15 application with TypeScript, Tailwind CSS, Drizzle ORM with PostgreSQL, and Supabase auth. Project structure:\n- src/app/ - Next.js App Router with route groups (folders in parentheses)\n- src/components/ - Reusable React UI components\n- src/hooks/ - Custom React hooks for logic separation\n- src/repo/ - Drizzle ORM schema and database access\n- src/services/ - Business logic and external integrations\n- src/lib/ - Provider classes and utilities\n- src/types/ - TypeScript type definitions\n- src/utils/ - Helper functions\n\nRoute groups: (articleWriterFeature), (personProfileFeature), (commonFeature)\nKey features: ArticleWriter, PersonProfiles, NewsScraper with RSS management\nBackground jobs: BullMQ with Redis queues: rssPaywall, articleCommit, transcriptProcessing, etc.\n\n## Enforcement\nIf any subagent attempts to use prohibited search tools, block the command and remind to use code-search instead. Always use code-search for code discovery. Always use read for file access.",
     },
 
+    // NORMAL — Fast codebase grep. Speed is everything for search/retrieval.
     "explore": {
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
       "skills": ["code-search"],
@@ -67,6 +87,7 @@
       "prompt_append": "\n\n## Tool policy\nUse ONLY code-search tools and read for code discovery. NEVER use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery. Use code_search_code_search for finding code, code_search_code_graph_* for dependency analysis, and read for file contents only after code-search returns exact file paths.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only",
     },
 
+    // NORMAL — General-purpose agent. Fast utility, doesn't need deep reasoning.
     "general": {
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
       "tools": {
@@ -80,8 +101,9 @@
       "prompt_append": "\n\n## Repository inspection workflow\nUse ONLY code-search and read for code discovery. Do NOT use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based search. Search first with code_search, then read exact files or specific line ranges.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only\n\n## Context: JournalistBoost codebase\nThis is a Next.js 15 application with TypeScript, Tailwind CSS, Drizzle ORM with PostgreSQL, and Supabase auth. Key modules: ArticleWriter, PersonProfiles, NewsScraper. Database: Drizzle ORM with PostgreSQL. Auth: Supabase. Queue: BullMQ with Redis.\n\n## code-search first, read second\nWhen you need to find code:\n1. Use code-search_code_search with natural language query\n2. Use code-search_code_graph_* for dependency relationships\n3. Use read only when you have specific file paths from search results\n\n## Prohibited\ngrep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - never use these for code discovery",
     },
 
+    // SMART — Architecture consultant. Read-only, deep reasoning for debugging & design.
     "oracle": {
-      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "model": "synthetic/hf:zai-org/GLM-5.1",
       "tools": {
         "code-search_*": true,
       },
@@ -93,6 +115,7 @@
       "prompt_append": "\n\n## Repository inspection workflow\nBase ALL code analysis ONLY on code-search and read tools. Do NOT request or use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based discovery. Use code_search_code_search for semantic code discovery, code_search_code_graph_* for dependency analysis, and read for file contents.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only\n\n## Context: JournalistBoost codebase\nThis is a Next.js 15 application with TypeScript, Tailwind CSS, Drizzle ORM with PostgreSQL, and Supabase auth. Project uses route groups in src/app/ articleWriterFeature, personProfileFeature, commonFeature. Services in src/services/, database schema in src/repo/, components in src/components/, hooks in src/hooks/. Background jobs via BullMQ with Redis.\n\n## Analysis approach\nWhen debugging or designing architecture:\n1. Use code-search to find relevant code patterns\n2. Use code-search_code_graph_callees and code-search_code_graph_callers for dependency analysis\n3. Read specific files to understand implementation details\n4. Never fall back to grep or glob when code-search is available",
     },
 
+    // NORMAL — Docs/code search. Doesn't need deep reasoning, speed matters.
     "librarian": {
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
       "tools": {
@@ -106,57 +129,72 @@
       "prompt_append": "\n\n## Repository inspection workflow\nUse ONLY code-search and read for code/document discovery within this repository. Never use grep, glob, list, bash, find, fd, rg, ls, cat, sed, awk, ast_grep_search, ast_grep_replace, or shell discovery. For external documentation lookup official docs and GitHub examples, you may use web search tools, but code discovery within this project must use code_search first.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only\n\n## Context: JournalistBoost codebase\nThis is a Next.js 15 application with TypeScript, Tailwind CSS, Drizzle ORM with PostgreSQL, and Supabase auth. When looking up patterns in this codebase, always use code-search. When searching external resources libraries and frameworks, you may use web search.\n\n## Allowed tools for repo inspection\n- code-search_code_search - semantic code search\n- code-search_code_graph_* - dependency analysis\n- read - file contents\n- Web search tools - external documentation only",
     },
 
+    // SMART — Strategic planner. Decomposes complex tasks into structured work plans.
     "prometheus": {
-      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "model": "synthetic/hf:zai-org/GLM-5.1",
     },
 
+    // SMART — Pre-planning consultant. Identifies hidden intentions & ambiguities.
     "metis": {
-      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "model": "synthetic/hf:zai-org/GLM-5.1",
     },
 
+    // NORMAL — Todo orchestrator. Simple coordination, speed preferred.
     "atlas": {
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
     },
 
+    // NORMAL — Category executor. Follows category model assignments, speed preferred.
     "sisyphus-junior": {
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
     },
 
+    // SMART — Expert plan reviewer. Evaluates against rigorous clarity/completeness standards.
     "momus": {
-      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "model": "synthetic/hf:zai-org/GLM-5.1",
     },
 
+    // SMART — Autonomous deep worker. Principle-driven, goal-oriented execution.
     "hephaestus": {
-      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "model": "synthetic/hf:zai-org/GLM-5.1",
     },
 
+    // NORMAL — PDF/image analysis. Utility vision agent, speed matters.
     "multimodal-looker": {
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
     },
   },
 
   "categories": {
+    // SMART — Visual/frontend/design. Needs high creativity and quality output.
     "visual-engineering": {
-      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "model": "synthetic/hf:zai-org/GLM-5.1",
     },
+    // SMART — Maximum reasoning needed. Architecture decisions, complex algorithms.
     "ultrabrain": {
-      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "model": "synthetic/hf:zai-org/GLM-5.1",
     },
+    // SMART — Deep coding, complex multi-file logic. Needs analytical depth.
     "deep": {
-      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "model": "synthetic/hf:zai-org/GLM-5.1",
     },
+    // SMART — Creative/unconventional approaches. Needs intelligence for novel solutions.
     "artistry": {
-      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "model": "synthetic/hf:zai-org/GLM-5.1",
     },
+    // NORMAL — Simple, fast tasks. Typo fixes, single-file changes. Speed > smarts.
     "quick": {
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
     },
+    // NORMAL — General standard work. Balanced speed and capability.
     "unspecified-low": {
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
     },
+    // SMART — General complex work. Needs strong instruction following.
     "unspecified-high": {
-      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "model": "synthetic/hf:zai-org/GLM-5.1",
     },
+    // NORMAL — Text, docs, prose. Speed matters, less reasoning required.
     "writing": {
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
     },
