@@ -257,6 +257,7 @@ curl -sN "https://cli.petartopic.com/watch/hegnar-journalist-boost?session=<sess
 
 2. Watch for SSE events:
    - data: {"type": "message", ...} — new session message
+   - data: {"type": "permission.asked", ...} — **OpenCode needs approval** (show buttons!)
    - data: {"type": "done"} — session is complete, stop polling
    - data: {"type": "error", ...} — error occurred
 
@@ -308,6 +309,62 @@ Mode: run
 5. Done — callback fires when OpenCode finishes
 
 
+
+## Permission / Approval Flow
+
+When OpenCode needs user approval for a tool execution (bash, file write, etc.), the watch SSE stream emits a `permission.asked` event.
+
+### Permission Event Format
+
+```json
+{
+  "type": "permission.asked",
+  "id": "perm_xxx",
+  "sessionID": "ses_xxx",
+  "permission": "bash",
+  "patterns": ["*.ts"],
+  "tool": "bash",
+  "metadata": {}
+}
+```
+
+### Responding to Permission Requests
+
+POST to `/permission/respond` with one of three actions:
+
+```bash
+# Approve once:
+curl -X POST https://cli.petartopic.com/permission/respond \
+  -H "Content-Type: application/json" \
+  -d '{"project": "/Users/petartopic/Desktop/Petar/Employee-tracker", "requestID": "perm_xxx", "reply": "once"}'
+
+# Always allow this permission:
+curl -X POST https://cli.petartopic.com/permission/respond \
+  -H "Content-Type: application/json" \
+  -d '{"project": "/Users/petartopic/Desktop/Petar/Employee-tracker", "requestID": "perm_xxx", "reply": "always"}'
+
+# Reject:
+curl -X POST https://cli.petartopic.com/permission/respond \
+  -H "Content-Type: application/json" \
+  -d '{"project": "/Users/petartopic/Desktop/Petar/Employee-tracker", "requestID": "perm_xxx", "reply": "reject"}'
+```
+
+**Reply values:**
+| Value | Effect |
+|-------|--------|
+| `"once"` | Approve this one request only |
+| `"always"` | Approve this and all future requests of the same permission type |
+| `"reject"` | Deny the request |
+
+### Watcher Subagent Pattern
+
+When a watcher subagent receives a `permission.asked` event, it should:
+1. Notify the user via Telegram with the tool name and permission type
+2. Present three options: Approve (once), Always Allow, Reject
+3. On user selection, POST to `/permission/respond`
+4. Continue watching the SSE stream
+
+---
 
 ## Permanent Agent Monitor
 
@@ -376,6 +433,7 @@ curl -sN "https://cli.petartopic.com/watch/hegnar-journalist-boost?session=ses_x
 
 The SSE stream outputs `data: {...}` lines. Parse with `grep`:
 - `grep '"type":"message"'` — session messages
+- `grep '"type":"permission.asked"'` — **approval needed** (respond via `/permission/respond`)
 - `grep '"type":"done"'` — session complete
 - `grep '"type":"text"'` — text parts within messages
 - `grep '"reasoning"'` — agent reasoning traces
@@ -446,6 +504,7 @@ curl -X POST https://cli.petartopic.com/send \
 | POST | `/send` | `{"project", "sessionId", "prompt"}` | Send prompt |
 | POST | `/stop` | `{"project", "sessionId"}` | Abort execution |
 | GET | `/watch/:project?session=ses_xxx&interval=5000` | — | SSE stream for session messages |
+| POST | `/permission/respond` | `{"project", "requestID", "reply"}` | Respond to permission request (`"once"`, `"always"`, or `"reject"`) |
 
 **SSE Watch URL format:** Use the project slug/name directly — NOT the full URL-encoded path.
 - ✅ `https://cli.petartopic.com/watch/hegnar-journalist-boost?session=ses_xxx&interval=5000`

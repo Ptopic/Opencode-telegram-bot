@@ -5,6 +5,10 @@ interface EmbedderConfig {
   model?: string;
   apiKey?: string;
   baseUrl?: string;
+  batchSize?: number;
+  maxRetries?: number;
+  baseDelayMs?: number;
+  interBatchDelayMs?: number;
 }
 
 interface OpenAIResponse {
@@ -12,14 +16,42 @@ interface OpenAIResponse {
   error?: { message: string };
 }
 
+function extractRetryWaitMsFromRateLimitMessage(errorMessage: string): number | null {
+  const match = errorMessage.match(/try again in (\d+)\s*ms/i);
+  if (match) return parseInt(match[1], 10);
+  // Also handle "try again in X.Xs" format
+  const secMatch = errorMessage.match(/try again in ([\d.]+)\s*s/i);
+  if (secMatch) return Math.ceil(parseFloat(secMatch[1]) * 1000);
+  return null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+/** Exponential backoff with jitter: base * 2^attempt + random jitter */
+function backoffDelay(attempt: number, baseMs: number): number {
+  const exponentialDelay = baseMs * 2 ** attempt;
+  const jitter = Math.random() * baseMs;
+  return exponentialDelay + jitter;
+}
+
 export class Embedder {
   private config: EmbedderConfig;
   private apiKey: string = '';
   private model: string = 'text-embedding-3-large';
   private baseUrl: string = 'https://api.openai.com/v1';
+  private batchSize: number;
+  private maxRetries: number;
+  private baseDelayMs: number;
+  private interBatchDelayMs: number;
 
   constructor(config: EmbedderConfig) {
     this.config = config;
+    this.batchSize = config.batchSize ?? 50;
+    this.maxRetries = config.maxRetries ?? 5;
+    this.baseDelayMs = config.baseDelayMs ?? 2000;
+    this.interBatchDelayMs = config.interBatchDelayMs ?? 200;
   }
 
   async initialize(): Promise<void> {
@@ -29,17 +61,19 @@ export class Embedder {
     console.log('[Embedder] provider:', this.config.provider);
     console.log('[Embedder] apiKey:', this.apiKey ? 'set' : 'MISSING');
     console.log('[Embedder] model:', this.model);
+    console.log('[Embedder] batchSize:', this.batchSize, 'maxRetries:', this.maxRetries, 'interBatchDelayMs:', this.interBatchDelayMs);
     if (!this.apiKey) throw new Error('OPENAI_API_KEY is required for OpenAI provider');
   }
 
   private async embedOpenAI(texts: string[]): Promise<number[][]> {
     const results: number[][] = new Array(texts.length);
-    const batchSize = 100;
+    const totalBatches = Math.ceil(texts.length / this.batchSize);
 
-    for (let i = 0; i < texts.length; i += batchSize) {
-      const batch = texts.slice(i, i + batchSize);
-      let retries = 3;
-      while (retries > 0) {
+    for (let i = 0; i < texts.length; i += this.batchSize) {
+      const batch = texts.slice(i, i + this.batchSize);
+      const batchNum = Math.floor(i / this.batchSize) + 1;
+
+      for (let attempt = 0; attempt < this.maxRetries; attempt++) {
         try {
           const response = await fetch(`${this.baseUrl}/embeddings`, {
             method: 'POST',
@@ -56,7 +90,19 @@ export class Embedder {
           const data = await response.json() as OpenAIResponse;
 
           if (!response.ok || data.error) {
-            throw new Error(data.error?.message ?? `HTTP ${response.status}`);
+            const errorMsg = data.error?.message ?? `HTTP ${response.status}`;
+
+            if (response.status === 429 || errorMsg.toLowerCase().includes('rate limit')) {
+              const retryWait = extractRetryWaitMsFromRateLimitMessage(errorMsg);
+              const delay = retryWait
+                ? retryWait + 500
+                : backoffDelay(attempt, this.baseDelayMs);
+              console.warn(`[Embedder] Rate limit hit on batch ${batchNum}/${totalBatches}, attempt ${attempt + 1}/${this.maxRetries}. Waiting ${Math.round(delay)}ms...`);
+              await sleep(delay);
+              continue;
+            }
+
+            throw new Error(errorMsg);
           }
 
           for (const item of data.data ?? []) {
@@ -64,10 +110,25 @@ export class Embedder {
           }
           break;
         } catch (err) {
-          retries--;
-          if (retries === 0) throw err;
-          await new Promise(r => setTimeout(r, 1000));
+          if (err instanceof Error && (err.message.toLowerCase().includes('rate limit') || err.message.toLowerCase().includes('429'))) {
+            const retryWait = extractRetryWaitMsFromRateLimitMessage(err.message);
+            const delay = retryWait
+              ? retryWait + 500
+              : backoffDelay(attempt, this.baseDelayMs);
+            console.warn(`[Embedder] Rate limit error on batch ${batchNum}/${totalBatches}, attempt ${attempt + 1}/${this.maxRetries}. Waiting ${Math.round(delay)}ms...`);
+            await sleep(delay);
+            continue;
+          }
+
+          if (attempt === this.maxRetries - 1) throw err;
+          const delay = backoffDelay(attempt, this.baseDelayMs);
+          console.warn(`[Embedder] Batch ${batchNum}/${totalBatches} failed (attempt ${attempt + 1}/${this.maxRetries}), retrying in ${Math.round(delay)}ms...`);
+          await sleep(delay);
         }
+      }
+
+      if (this.interBatchDelayMs > 0 && i + this.batchSize < texts.length) {
+        await sleep(this.interBatchDelayMs);
       }
     }
 

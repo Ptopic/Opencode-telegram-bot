@@ -67,6 +67,10 @@ export interface Config {
     model?: string;
     apiKey?: string;
     baseUrl?: string;
+    batchSize?: number;
+    maxRetries?: number;
+    baseDelayMs?: number;
+    interBatchDelayMs?: number;
   };
   watcher: {
     paths: string[];

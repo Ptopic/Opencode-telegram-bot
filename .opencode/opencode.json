@@ -17,15 +17,5 @@
       },
       "enabled": true
     }
-  },
-  "provider": {
-    "synthetic": {
-      "models": {
-        "hf:zai-org/GLM-5.1": {
-          "name": "GLM-5.1"
-        }
-      }
-    }
   }
 }
-

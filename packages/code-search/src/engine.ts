@@ -34,6 +34,10 @@ export class CodeSearchEngine {
       model: this.config.embedder.model,
       apiKey: this.config.embedder.apiKey,
       baseUrl: this.config.embedder.baseUrl,
+      batchSize: this.config.embedder.batchSize,
+      maxRetries: this.config.embedder.maxRetries,
+      baseDelayMs: this.config.embedder.baseDelayMs,
+      interBatchDelayMs: this.config.embedder.interBatchDelayMs,
     });
     this.summarizer = new ChunkSummarizer({
       provider: 'openai',

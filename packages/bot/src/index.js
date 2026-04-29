@@ -549,6 +549,7 @@ const telegramCommandMap = new Map();
 const trackedMessageIdsByChat = new Map();
 const seenSessionMessageKeysByChatProject = new Map();
 const selectedModeByChatProject = new Map();
+const pendingApprovalsByChat = new Map();
 
 let liveSyncInFlight = false;
 const liveSyncInFlightByChatProject = new Set();
@@ -1651,7 +1652,7 @@ async function syncTelegramChatFromSession(chatId, workspace, sessionId, options
     rememberSessionMessageKeys(chatProjectKey, rawMessages);
 }
 
-async function waitForSessionIdle(workspace, sessionId, timeoutMs = EVENT_STREAM_TIMEOUT_MS) {
+async function waitForSessionIdle(workspace, sessionId, timeoutMs = EVENT_STREAM_TIMEOUT_MS, chatId = null) {
     const deadline = Date.now() + timeoutMs;
     let retryDelay = EVENT_STREAM_RETRY_BASE_MS;
     let lastError = null;
@@ -1709,6 +1710,14 @@ async function waitForSessionIdle(workspace, sessionId, timeoutMs = EVENT_STREAM
                         const reason = event?.properties?.error ?? event?.properties?.message ?? "unknown session error";
                         throw new Error(`Session error: ${String(reason)}`);
                     }
+
+                    if (eventType === "permission.asked" && chatId) {
+                        const permissionId = event?.properties?.id;
+                        const toolName = event?.properties?.tool ?? "unknown tool";
+                        if (permissionId) {
+                            await sendApprovalRequest(chatId, permissionId, toolName);
+                        }
+                    }
                 }
             }
 
@@ -1742,7 +1751,7 @@ async function fetchLatestSessionReply(workspace, sessionId) {
     return "";
 }
 
-async function recoverReplyFromEventStream(workspace, sessionId, sourceError) {
+async function recoverReplyFromEventStream(workspace, sessionId, sourceError, chatId = null) {
     console.warn("Recovering interaction via event stream", {
         projectPath: workspace.projectPath,
         projectName: workspace.projectName,
@@ -1784,7 +1793,7 @@ async function recoverReplyFromEventStream(workspace, sessionId, sourceError) {
     }
 
     try {
-        await waitForSessionIdle(workspace, sessionId);
+        await waitForSessionIdle(workspace, sessionId, EVENT_STREAM_TIMEOUT_MS, chatId);
         return await fetchLatestSessionReply(workspace, sessionId);
     } catch (streamErr) {
         console.error("Event stream recovery failed:", streamErr?.message);
@@ -1802,7 +1811,7 @@ async function recoverReplyFromEventStream(workspace, sessionId, sourceError) {
     }
 }
 
-async function runWorkspaceInteraction(workspace, sessionId, endpoint, payload) {
+async function runWorkspaceInteraction(workspace, sessionId, endpoint, payload, chatId = null) {
     try {
         const interaction = await postWorkspaceInteraction(workspace, sessionId, endpoint, payload);
         const directReply = extractReply(interaction?.res?.data);
@@ -1814,7 +1823,7 @@ async function runWorkspaceInteraction(workspace, sessionId, endpoint, payload) 
             };
         }
 
-        const recoveredReply = await recoverReplyFromEventStream(interaction.workspace, sessionId);
+        const recoveredReply = await recoverReplyFromEventStream(interaction.workspace, sessionId, null, chatId);
         if (recoveredReply) {
             return {
                 workspace: interaction.workspace,
@@ -1833,7 +1842,7 @@ async function runWorkspaceInteraction(workspace, sessionId, endpoint, payload) 
             throw err;
         }
 
-        const recoveredReply = await recoverReplyFromEventStream(workspace, sessionId, err);
+        const recoveredReply = await recoverReplyFromEventStream(workspace, sessionId, err, chatId);
         if (!recoveredReply) {
             throw err;
         }
@@ -2748,6 +2757,33 @@ async function sendReplyWithDifit(chatId, reply, workspace) {
     }
 }
 
+async function sendApprovalRequest(chatId, permissionId, toolName) {
+    const key = `${chatId}`;
+    const approval = {
+        permissionId,
+        toolName: toolName || "unknown",
+        timestamp: Date.now(),
+    };
+    pendingApprovalsByChat.set(key, approval);
+
+    const message = `🔐 *Permission Required*
+
+Tool: *${toolName || "unknown"}*
+
+Do you want to approve this tool execution?`;
+
+    await sendTrackedMessage(chatId, message, {
+        parse_mode: "Markdown",
+        reply_markup: {
+            inline_keyboard: [[
+                { text: "✅ Approve", callback_data: `approve:${permissionId}` },
+                { text: "🔓 Always Allow", callback_data: `always:${permissionId}` },
+                { text: "❌ Reject", callback_data: `reject:${permissionId}` },
+            ]],
+        },
+    });
+}
+
 bot.on("message", async (msg) => {
     const chatId = msg.chat.id;
     trackMessageId(chatId, msg.message_id);
@@ -3088,7 +3124,7 @@ bot.on("message", async (msg) => {
                 const interaction = await runWorkspaceInteraction(workspace, sessionId, "message", {
                     ...withSelectedMode(chatId, workspace, {}),
                     parts: [{ type: "text", text: prompt }],
-                });
+                }, chatId);
                 workspace = interaction.workspace;
                 res = interaction.response;
                 if (interaction.reply) {
@@ -3126,7 +3162,7 @@ Rewritten request (clearer, more structured for OpenCode agent execution):`;
                 const interaction = await runWorkspaceInteraction(runtime, sessionId, "message", {
                     ...withSelectedMode(chatId, runtime, {}),
                     parts: [{ type: "text", text: rewrittenPrompt }],
-                });
+                }, chatId);
                 workspace = interaction.workspace;
                 res = interaction.response;
                 if (interaction.reply) {
@@ -3143,7 +3179,7 @@ Rewritten request (clearer, more structured for OpenCode agent execution):`;
                     ...withSelectedMode(chatId, workspace, {}),
                     command,
                     arguments: argumentsText,
-                });
+                }, chatId);
                 workspace = interaction.workspace;
                 res = interaction.response;
                 if (interaction.reply) {
@@ -3157,7 +3193,7 @@ Rewritten request (clearer, more structured for OpenCode agent execution):`;
             const interaction = await runWorkspaceInteraction(workspace, sessionId, "message", {
                 ...withSelectedMode(chatId, workspace, {}),
                 parts: [{ type: "text", text }],
-            });
+            }, chatId);
             workspace = interaction.workspace;
             res = interaction.response;
             if (interaction.reply) {
@@ -3227,9 +3263,55 @@ bot.on("callback_query", async (query) => {
 
     console.log("Callback received", { chatId, data, hasMessage: !!query?.message });
 
-    if (!chatId || (!data.startsWith("switch:") && !data.startsWith("project:") && !data.startsWith("mode:"))) {
+    if (!chatId || (!data.startsWith("switch:") && !data.startsWith("project:") && !data.startsWith("mode:") && !data.startsWith("approve:") && !data.startsWith("always:") && !data.startsWith("reject:"))) {
         console.log("Callback ignored - invalid chatId or data", { chatId, data });
         await answerCallbackQuerySafely(query?.id);
+        return;
+    }
+
+    if (data.startsWith("approve:") || data.startsWith("always:") || data.startsWith("reject:")) {
+        const action = data.startsWith("approve:") ? "allow"
+            : data.startsWith("always:") ? "accept"
+            : "deny";
+        const permissionId = data.split(":")[1];
+
+        const projectPath = getActiveProjectPath(chatId);
+        if (!projectPath) {
+            await answerCallbackQuerySafely(query?.id, { text: "No active project", show_alert: true });
+            return;
+        }
+
+        const workspace = await ensureWorkspaceRuntime(projectPath);
+        const sessionId = sessionByChatProject.get(getChatProjectKey(chatId, projectPath));
+        if (!sessionId) {
+            await answerCallbackQuerySafely(query?.id, { text: "No active session", show_alert: true });
+            return;
+        }
+
+        try {
+            await axios.post(
+                `${workspace.baseUrl}/session/${sessionId}/permissions/${permissionId}`,
+                { response: action, remember: data.startsWith("always:") }
+            );
+
+            pendingApprovalsByChat.delete(`${chatId}`);
+            await answerCallbackQuerySafely(query?.id, {
+                text: `Permission ${action === "accept" ? "always allowed" : action}d`,
+                show_alert: false,
+            });
+            await sendTrackedMessage(chatId, `✅ Permission ${action === "accept" ? "always allowed" : action}d for ${permissionId}`);
+        } catch (err) {
+            console.error("Failed to respond to permission", {
+                permissionId,
+                action,
+                error: err?.message,
+                status: err?.response?.status,
+            });
+            await answerCallbackQuerySafely(query?.id, {
+                text: "Failed to respond to permission",
+                show_alert: true,
+            });
+        }
         return;
     }
 

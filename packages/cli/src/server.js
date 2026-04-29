@@ -303,7 +303,8 @@ async function handleRequest(req, res) {
       const intervalMs = parseInt(url.searchParams.get("interval") ?? "2000", 10);
 
       let emptyPolls = 0;
-      const MAX_EMPTY_POLLS = 5; // 10 seconds of silence (5 x 2000ms) = session likely done
+      const MAX_EMPTY_POLLS = 5;
+      const emittedPermissionIds = new Set();
 
       const interval = setInterval(async () => {
         try {
@@ -316,19 +317,48 @@ async function handleRequest(req, res) {
               res.write(`data: ${data}\n\n`);
             }
             seenCount = messages.length;
-            emptyPolls = 0; // Reset counter when we get new messages
-          } else {
+            emptyPolls = 0;
+          }
+
+          try {
+            const permRes = await fetch(`${instance.base_url}/permission`, {
+              headers: { Accept: "application/json" },
+              signal: AbortSignal.timeout(5000),
+            });
+            if (permRes.ok) {
+              const permPayload = await permRes.json();
+              const pending = Array.isArray(permPayload) ? permPayload
+                : Array.isArray(permPayload?.permissions) ? permPayload.permissions
+                : Array.isArray(permPayload?.pending) ? permPayload.pending
+                : [];
+              for (const perm of pending) {
+                const permId = perm?.id ?? perm?.permissionID ?? null;
+                if (!permId || emittedPermissionIds.has(permId)) continue;
+                if (perm.sessionID && perm.sessionID !== sessionId) continue;
+                emittedPermissionIds.add(permId);
+                const permEvent = {
+                  type: "permission.asked",
+                  id: permId,
+                  sessionID: perm.sessionID ?? perm.sessionId ?? sessionId,
+                  permission: perm.permission ?? null,
+                  patterns: Array.isArray(perm.patterns) ? perm.patterns : [],
+                  tool: perm.tool ?? perm.toolName ?? perm.permission ?? null,
+                  metadata: perm.metadata ?? {},
+                };
+                res.write(`data: ${JSON.stringify(permEvent)}\n\n`);
+                emptyPolls = 0;
+              }
+            }
+          } catch {}
+
+          if (messages.length <= seenCount) {
             emptyPolls++;
-            // Check if session appears done: we have messages, and no new messages for MAX_EMPTY_POLLS
             if (emptyPolls >= MAX_EMPTY_POLLS && seenCount > 0) {
-              // Session is likely done - emit done and close
-              res.write(`data: ${JSON.stringify({ type: "done", isFinished: true })}\n\n`);
+              res.write(`data: ${JSON.stringify({ type: "done", isFinished: false, reason: "timeout" })}\n\n`);
               clearInterval(interval);
               res.end();
               return;
             } else if (emptyPolls > 0 && emptyPolls < MAX_EMPTY_POLLS) {
-              // Not enough empty polls for isFinished:true yet, but emit a keepalive
-              // done=false so the client knows the stream is still polling
               res.write(`data: ${JSON.stringify({ type: "done", isFinished: false })}\n\n`);
             }
           }
@@ -437,8 +467,6 @@ async function handleRequest(req, res) {
                   const event = parseSseFrame(frame);
                   if (!event) continue;
 
-                  // Forward message events as-is so Hermes receives the same format
-                  // as /watch/:project (role + parts) plus any other event types
                   const eventType = typeof event.type === "string" ? event.type : "";
 
                   if (eventType === "session.idle" && sessionFilter(event)) {
@@ -446,13 +474,52 @@ async function handleRequest(req, res) {
                       finished = true;
                       const data = JSON.stringify({ type: "done", isFinished: true });
                       res.write(`data: ${data}\n\n`);
-                      res.end();
-                      controller.close();
-                      return;
+                      // Don't close immediately - session.idle may arrive before all
+                      // message events have been forwarded. Close after buffer drains
+                      // or after timeout to ensure client receives all events.
+                      setTimeout(() => {
+                        if (!res.writableEnded) res.end();
+                        controller.close();
+                      }, 2000);
                     }
+                    continue;
                   }
 
-                  // Forward all events as message events so Hermes gets them
+                  // ── Permission events ──────────────────────────────────────────
+                  // Emit as first-class "permission.asked" events so consumers
+                  // (OpenClaw skills, Telegram bots, etc.) can detect them and
+                  // render approval/deny buttons.  The payload includes the
+                  // permission ID, session ID, tool name and patterns needed to
+                  // POST a reply back to OpenCode.
+                  if (eventType === "permission.asked") {
+                    const props = event.properties ?? event;
+                    const permEvent = {
+                      type: "permission.asked",
+                      id: props.id ?? props.permissionID ?? null,
+                      sessionID: props.sessionID ?? props.sessionId ?? null,
+                      permission: props.permission ?? null,
+                      patterns: Array.isArray(props.patterns) ? props.patterns : [],
+                      tool: props.tool ?? props.toolName ?? props.permission ?? null,
+                      metadata: props.metadata ?? {},
+                    };
+                    const data = JSON.stringify(permEvent);
+                    res.write(`data: ${data}\n\n`);
+                    continue;
+                  }
+
+                  if (eventType === "permission.replied") {
+                    const props = event.properties ?? event;
+                    const permReplyEvent = {
+                      type: "permission.replied",
+                      id: props.id ?? props.permissionID ?? null,
+                      sessionID: props.sessionID ?? props.sessionId ?? null,
+                      reply: props.reply ?? props.response ?? null,
+                    };
+                    const data = JSON.stringify(permReplyEvent);
+                    res.write(`data: ${data}\n\n`);
+                    continue;
+                  }
+
                   const data = JSON.stringify({ type: eventType || "event", payload: event });
                   res.write(`data: ${data}\n\n`);
                 }
@@ -628,6 +695,46 @@ async function handleRequest(req, res) {
       await dbSetMode(projectPath, resolvedMode);
 
       return jsonResponse(res, 200, { ok: true, mode: resolvedMode, sessionId, index: modeIndex });
+    }
+
+    // ── POST /permission/respond ──────────────────────────────────────────
+    // Approve or deny a pending permission request from OpenCode.
+    // Body: { project, requestID, reply, message?, sessionId? }
+    //   reply: "once" | "always" | "reject"
+    if (pathname === "/permission/respond" && method === "POST") {
+      const body = await parseBody(req);
+      const { project: projectPath, requestID, reply, message } = body;
+
+      if (!projectPath) return errorResponse(res, 400, "Missing 'project' in request body");
+      if (!requestID) return errorResponse(res, 400, "Missing 'requestID' in request body");
+      if (!["once", "always", "reject"].includes(reply)) {
+        return errorResponse(res, 400, "Invalid 'reply' — must be \"once\", \"always\", or \"reject\"");
+      }
+
+      const instance = await getInstance(projectPath);
+      if (!instance || instance.status !== "ready") {
+        return errorResponse(res, 404, "No running instance for this project");
+      }
+
+      try {
+        const replyPayload = { reply, ...(message ? { message } : {}) };
+        const replyRes = await fetch(`${instance.base_url}/permission/${encodeURIComponent(requestID)}/reply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(replyPayload),
+          signal: AbortSignal.timeout(10000),
+        });
+
+        if (!replyRes.ok) {
+          const errText = await replyRes.text().catch(() => "");
+          return errorResponse(res, replyRes.status, `OpenCode permission reply failed: ${errText}`);
+        }
+
+        const result = await replyRes.json().catch(() => ({}));
+        return jsonResponse(res, 200, { ok: true, requestID, reply, result });
+      } catch (err) {
+        return errorResponse(res, 502, `Failed to reach OpenCode: ${err.message}`);
+      }
     }
 
     // ── POST /stop ────────────────────────────────────────────────────────

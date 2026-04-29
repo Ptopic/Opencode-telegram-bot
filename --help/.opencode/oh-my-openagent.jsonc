@@ -1,0 +1,186 @@
+{
+  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-openagent/master/assets/oh-my-openagent.schema.json",
+
+  "mcp": {
+    "code-search": {
+      "type": "local",
+      "command": [
+        "node",
+        "/Users/petartopic/Desktop/Petar/Opencode-telegram-bot/packages/mcp-server/dist/index.js",
+      ],
+      "environment": {
+        "CODE_SEARCH_API_URL": "http://localhost:4098",
+      },
+      "enabled": true,
+    },
+  },
+
+  "permission": {
+    "bash": "ask",
+    "grep": "deny",
+    "rg": "deny",
+  },
+
+  "tools": {
+    "code-search_*": true,
+  },
+
+  "agents": {
+    "sisyphus": {
+      "model": "synthetic/hf:zai-org/GLM-5.1",
+      "tools": {
+        "code-search_*": true,
+      },
+
+      "permission": {
+        "bash": "ask",
+        "grep": "deny",
+        "rg": "deny",
+      },
+      "prompt_append": "\n\n## Tool policy\nYou MUST use only code-search and read tools for ALL code discovery. NEVER use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash search, or any shell-based discovery tools. If code must be located, first use code_search_code_search, then use read for file contents. When delegating tasks to subagents, always instruct them to use only code-search and read tools - never allow glob, grep, bash, find, ast_grep_search, ast_grep_replace, or similar search tools.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only\n\n## Context: JournalistBoost codebase\nThis is a Next.js 15 application with TypeScript, Tailwind CSS, Drizzle ORM with PostgreSQL, and Supabase auth. Project structure:\n- src/app/ - Next.js App Router with route groups (folders in parentheses)\n- src/components/ - Reusable React UI components\n- src/hooks/ - Custom React hooks for logic separation\n- src/repo/ - Drizzle ORM schema and database access\n- src/services/ - Business logic and external integrations\n- src/lib/ - Provider classes and utilities\n- src/types/ - TypeScript type definitions\n- src/utils/ - Helper functions\n\nRoute groups: (articleWriterFeature), (personProfileFeature), (commonFeature)\nKey features: ArticleWriter, PersonProfiles, NewsScraper with RSS management\nBackground jobs: BullMQ with Redis queues: rssPaywall, articleCommit, transcriptProcessing, etc.\n\n## Workflow\n1. For code lookup: Use code-search_code_search first, then read specific files\n2. For understanding code: Use code-search_code_graph_* tools for dependency analysis\n3. Never default to grep/glob - code-search provides semantic understanding\n4. When delegating: Explicitly instruct subagents to use only code-search and read",
+    },
+
+    "ultrawork": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "tools": {
+        "code-search_*": true,
+      },
+      "permission": {
+        "bash": "ask",
+        "grep": "deny",
+        "rg": "deny",
+      },
+      "prompt_append": "\n\n## Tool policy\nUse ONLY code-search and read tools for repository inspection. NEVER use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based discovery. Translate every code lookup need into a code_search query first. If code-search returns insufficient results, use read on specific file paths, never search with shell tools.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only\n\n## Context: JournalistBoost codebase\nThis is a Next.js 15 application with TypeScript, Tailwind CSS, Drizzle ORM with PostgreSQL, and Supabase auth. Project structure:\n- src/app/ - Next.js App Router with route groups (folders in parentheses)\n- src/components/ - Reusable React UI components\n- src/hooks/ - Custom React hooks for logic separation\n- src/repo/ - Drizzle ORM schema and database access\n- src/services/ - Business logic and external integrations\n- src/lib/ - Provider classes and utilities\n- src/types/ - TypeScript type definitions\n- src/utils/ - Helper functions\n\nRoute groups: (articleWriterFeature), (personProfileFeature), (commonFeature)\nKey features: ArticleWriter, PersonProfiles, NewsScraper with RSS management\nBackground jobs: BullMQ with Redis queues: rssPaywall, articleCommit, transcriptProcessing, etc.\n\n## Enforcement\nIf any subagent attempts to use prohibited search tools, block the command and remind to use code-search instead. Always use code-search for code discovery. Always use read for file access.",
+    },
+
+    "explore": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "skills": ["code-search"],
+      "tools": {
+        "code-search_*": true,
+      },
+      "permission": {
+        "bash": "ask",
+        "grep": "deny",
+        "rg": "deny",
+      },
+      "prompt_append": "\n\n## Tool policy\nUse ONLY code-search tools and read for code discovery. NEVER use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery. Use code_search_code_search for finding code, code_search_code_graph_* for dependency analysis, and read for file contents only after code-search returns exact file paths.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only",
+    },
+
+    "general": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "tools": {
+        "code-search_*": true,
+      },
+      "permission": {
+        "bash": "ask",
+        "grep": "deny",
+        "rg": "deny",
+      },
+      "prompt_append": "\n\n## Repository inspection workflow\nUse ONLY code-search and read for code discovery. Do NOT use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based search. Search first with code_search, then read exact files or specific line ranges.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only\n\n## Context: JournalistBoost codebase\nThis is a Next.js 15 application with TypeScript, Tailwind CSS, Drizzle ORM with PostgreSQL, and Supabase auth. Key modules: ArticleWriter, PersonProfiles, NewsScraper. Database: Drizzle ORM with PostgreSQL. Auth: Supabase. Queue: BullMQ with Redis.\n\n## code-search first, read second\nWhen you need to find code:\n1. Use code-search_code_search with natural language query\n2. Use code-search_code_graph_* for dependency relationships\n3. Use read only when you have specific file paths from search results\n\n## Prohibited\ngrep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - never use these for code discovery",
+    },
+
+    "oracle": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "tools": {
+        "code-search_*": true,
+      },
+      "permission": {
+        "bash": "ask",
+        "grep": "deny",
+        "rg": "deny",
+      },
+      "prompt_append": "\n\n## Repository inspection workflow\nBase ALL code analysis ONLY on code-search and read tools. Do NOT request or use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based discovery. Use code_search_code_search for semantic code discovery, code_search_code_graph_* for dependency analysis, and read for file contents.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only\n\n## Context: JournalistBoost codebase\nThis is a Next.js 15 application with TypeScript, Tailwind CSS, Drizzle ORM with PostgreSQL, and Supabase auth. Project uses route groups in src/app/ articleWriterFeature, personProfileFeature, commonFeature. Services in src/services/, database schema in src/repo/, components in src/components/, hooks in src/hooks/. Background jobs via BullMQ with Redis.\n\n## Analysis approach\nWhen debugging or designing architecture:\n1. Use code-search to find relevant code patterns\n2. Use code-search_code_graph_callees and code-search_code_graph_callers for dependency analysis\n3. Read specific files to understand implementation details\n4. Never fall back to grep or glob when code-search is available",
+    },
+
+    "librarian": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+      "tools": {
+        "code-search_*": true,
+      },
+      "permission": {
+        "bash": "ask",
+        "grep": "deny",
+        "rg": "deny",
+      },
+      "prompt_append": "\n\n## Repository inspection workflow\nUse ONLY code-search and read for code/document discovery within this repository. Never use grep, glob, list, bash, find, fd, rg, ls, cat, sed, awk, ast_grep_search, ast_grep_replace, or shell discovery. For external documentation lookup official docs and GitHub examples, you may use web search tools, but code discovery within this project must use code_search first.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use)\n- ast_grep_search - use code_search instead\n- ast_grep_replace - use code_search for search, manual edit for replacements\n- grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash - use code_search only\n\n## Context: JournalistBoost codebase\nThis is a Next.js 15 application with TypeScript, Tailwind CSS, Drizzle ORM with PostgreSQL, and Supabase auth. When looking up patterns in this codebase, always use code-search. When searching external resources libraries and frameworks, you may use web search.\n\n## Allowed tools for repo inspection\n- code-search_code_search - semantic code search\n- code-search_code_graph_* - dependency analysis\n- read - file contents\n- Web search tools - external documentation only",
+    },
+
+    "prometheus": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+
+    "metis": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+
+    "atlas": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+
+    "sisyphus-junior": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+
+    "momus": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+
+    "hephaestus": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+
+    "multimodal-looker": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+  },
+
+  "categories": {
+    "visual-engineering": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+    "ultrabrain": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+    "deep": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+    "artistry": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+    "quick": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+    "unspecified-low": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+    "unspecified-high": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+    "writing": {
+      "model": "minimax-coding-plan/MiniMax-M2.7-highspeed",
+    },
+  },
+
+  "skills": {
+    "code-search": {
+      "description": "Semantic code search using vector embeddings, BM25, and knowledge graph. Use this skill when you need to find code by meaning, not just exact matches.",
+      "instructions": "Always use code-search tools for ALL code discovery. Use code-search_code_search for natural language queries. Use code-search_code_graph_* for dependency analysis. NEVER use grep, ripgrep, rg, glob, find, ls, cat, bash, or any shell-based search.",
+      "tools": {
+        "code-search_*": true,
+        "read": true,
+      },
+      "mcp_servers": {
+        "code-search": {
+          "command": "node",
+          "args": [
+            "/Users/petartopic/Desktop/Petar/Opencode-telegram-bot/packages/mcp-server/dist/index.js",
+          ],
+          "env": {
+            "CODE_SEARCH_API_URL": "http://localhost:4098",
+          },
+        },
+      },
+    },
+  },
+}
