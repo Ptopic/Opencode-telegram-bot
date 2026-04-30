@@ -350,7 +350,9 @@ async function handleRequest(req, res) {
       const MAX_EMPTY_POLLS = 5;
       const emittedPermissionIds = new Set();
       _clearCache();
-      const showToolCalls = loadServerConfig().toolCallDisplay === true;
+      const watchServerConfig = loadServerConfig();
+      const showToolCalls = watchServerConfig.toolCallDisplay === true;
+      const hiddenTools = new Set(watchServerConfig.hiddenTools ?? []);
 
       const interval = setInterval(async () => {
         try {
@@ -381,6 +383,26 @@ async function handleRequest(req, res) {
                   if (hasToolCallParts) continue;
                 }
               }
+
+              // ── hiddenTools filter ──────────────────────────────────────
+              if (hiddenTools.size > 0) {
+                const toolNameCandidates = [
+                  msg?.tool,
+                  msg?.toolName,
+                  msg?.name,
+                  msg?.part?.tool,
+                  msg?.part?.name,
+                ];
+                if (Array.isArray(msg?.parts)) {
+                  for (const p of msg.parts) {
+                    if (p && typeof p === "object") {
+                      toolNameCandidates.push(p.tool, p.name);
+                    }
+                  }
+                }
+                if (toolNameCandidates.some((name) => typeof name === "string" && hiddenTools.has(name))) continue;
+              }
+
               const data = JSON.stringify({
                 type: "message",
                 role,
@@ -490,7 +512,9 @@ async function handleRequest(req, res) {
       let waitingForBackgroundFollowup = false;
       let awaitingFinalIdle = false;
       _clearCache();
-      const showToolCalls = loadServerConfig().toolCallDisplay === true;
+      const serverConfig = loadServerConfig();
+      const showToolCalls = serverConfig.toolCallDisplay === true;
+      const hiddenTools = new Set(serverConfig.hiddenTools ?? []);
 
       const sessionFilter = (event) => {
         const candidates = [
@@ -767,6 +791,23 @@ async function handleRequest(req, res) {
                       );
                       if (hasToolCallParts) continue;
                     }
+                  }
+
+                  // ── hiddenTools filter ──────────────────────────────────────
+                  if (hiddenTools.size > 0) {
+                    const toolNameCandidates = [
+                      event?.properties?.part?.tool,
+                      event?.properties?.part?.name,
+                      event?.properties?.tool,
+                      event?.properties?.toolName,
+                      event?.tool,
+                      event?.toolName,
+                      event?.syncEvent?.data?.part?.tool,
+                      event?.syncEvent?.data?.part?.name,
+                      event?.syncEvent?.data?.tool,
+                      event?.syncEvent?.data?.toolName,
+                    ];
+                    if (toolNameCandidates.some((name) => typeof name === "string" && hiddenTools.has(name))) continue;
                   }
 
                   const data = JSON.stringify({

@@ -28,6 +28,7 @@ const DEFAULT_GLOBAL_CONFIG = {
   graphWeight: 0.15,
   summaryWeight: 0.25,
   toolCallDisplay: false,
+  hiddenTools: [],
 };
 
 let _cached = null;
@@ -78,6 +79,7 @@ export function loadGlobalConfig() {
       graphWeight: typeof raw.graphWeight === "number" ? raw.graphWeight : 0.15,
       summaryWeight: typeof raw.summaryWeight === "number" ? raw.summaryWeight : 0.25,
       toolCallDisplay: raw.toolCallDisplay === true,
+      hiddenTools: Array.isArray(raw.hiddenTools) ? raw.hiddenTools.filter((t) => typeof t === "string") : DEFAULT_GLOBAL_CONFIG.hiddenTools,
     };
   } catch {
     _globalCached = { ...DEFAULT_GLOBAL_CONFIG };
@@ -123,6 +125,7 @@ export function loadServerConfig() {
   const global = loadGlobalConfig();
   return {
     toolCallDisplay: global.toolCallDisplay,
+    hiddenTools: global.hiddenTools,
   };
 }
 

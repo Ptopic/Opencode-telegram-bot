@@ -11,6 +11,7 @@ const DEFAULT_CONFIG = {
   graphWeight: 0.15,
   summaryWeight: 0.25,
   toolCallDisplay: false,
+  hiddenTools: [],
 };
 
 const SEARCH_MODES = ["hybrid", "vector-graph", "vector-only"];
@@ -29,6 +30,7 @@ export async function codeConfigCommand(action, key, value) {
     console.log(`  graphWeight:     ${config.graphWeight}`);
     console.log(`  summaryWeight:   ${config.summaryWeight}`);
     console.log(`  toolCallDisplay: ${serverConfig.toolCallDisplay}`);
+    console.log(`  hiddenTools:     [${serverConfig.hiddenTools.join(", ")}]`);
     console.log();
     return;
   }
@@ -40,9 +42,9 @@ export async function codeConfigCommand(action, key, value) {
       process.exit(1);
     }
 
-    if (!["generateSummary", "searchMode", "bm25Weight", "vectorWeight", "graphWeight", "summaryWeight", "toolCallDisplay"].includes(key)) {
+    if (!["generateSummary", "searchMode", "bm25Weight", "vectorWeight", "graphWeight", "summaryWeight", "toolCallDisplay", "hiddenTools"].includes(key)) {
       console.error(`Unknown key: ${key}`);
-      console.error("Valid keys: generateSummary, searchMode, bm25Weight, vectorWeight, graphWeight, summaryWeight, toolCallDisplay");
+      console.error("Valid keys: generateSummary, searchMode, bm25Weight, vectorWeight, graphWeight, summaryWeight, toolCallDisplay, hiddenTools");
       process.exit(1);
     }
 
@@ -65,6 +67,10 @@ export async function codeConfigCommand(action, key, value) {
       process.exit(1);
     }
 
+    if (key === "hiddenTools") {
+      value = value.split(",").map((t) => t.trim()).filter(Boolean);
+    }
+
     if (["bm25Weight", "vectorWeight", "graphWeight", "summaryWeight"].includes(key)) {
       const num = parseFloat(value);
       if (isNaN(num) || num < 0 || num > 1) {
@@ -74,6 +80,7 @@ export async function codeConfigCommand(action, key, value) {
       value = num;
     } else if (key === "generateSummary" || key === "toolCallDisplay") {
       value = value === "true";
+    } else if (key === "hiddenTools") {
     }
 
     const config = existsSync(configPath)

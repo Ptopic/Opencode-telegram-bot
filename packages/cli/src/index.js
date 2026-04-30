@@ -831,6 +831,7 @@ if (command === "config") {
         console.log(`  generateSummary:  ${cfg.generateSummary}`);
         console.log(`  searchMode:       ${cfg.searchMode}`);
         console.log(`  toolCallDisplay:  ${cfg.toolCallDisplay}`);
+        console.log(`  hiddenTools:      [${cfg.hiddenTools.join(", ")}]`);
         console.log(`  (When true, tool call messages are sent in /watch SSE streams)\n`);
     } else if (sub === "tool-call-display" || sub === "toolcalldisplay") {
         const val = args[1];
@@ -844,9 +845,24 @@ if (command === "config") {
             console.error("Usage: opencode-telegram config tool-call-display <on|off>");
             process.exit(1);
         }
+    } else if (sub === "hidden-tools" || sub === "hiddentools") {
+        const toolList = args.slice(1).filter(Boolean);
+        if (toolList.length === 0) {
+            console.error("Usage: opencode-telegram config hidden-tools <tool1> <tool2> ...");
+            console.error("       opencode-telegram config hidden-tools --clear");
+            process.exit(1);
+        }
+        if (toolList.length === 1 && toolList[0] === "--clear") {
+            setGlobalConfigValue("hiddenTools", []);
+            console.log("\n  hiddenTools: [] (cleared)");
+        } else {
+            setGlobalConfigValue("hiddenTools", toolList);
+            console.log(`\n  hiddenTools: [${toolList.join(", ")}]`);
+        }
     } else {
         console.error("Usage: opencode-telegram config get");
         console.error("       opencode-telegram config tool-call-display <on|off>");
+        console.error("       opencode-telegram config hidden-tools <tool1> [tool2] ... [--clear]");
         process.exit(1);
     }
     process.exit(0);

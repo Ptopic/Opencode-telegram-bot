@@ -61,6 +61,7 @@ COMMANDS
   Utility
     config get                           Show server config
     config tool-call-display <on|off>    Toggle tool call messages in /watch SSE streams
+    config hidden-tools <tool1> [tool2]  Set tools to hide from /watch-native SSE streams
     help              Show this help text
 
 EXAMPLES
