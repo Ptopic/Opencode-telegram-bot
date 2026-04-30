@@ -6,7 +6,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { homedir } from "node:os";
 import { getSessionMessages as fetchMessages, listSessions } from "../api-client.js";
-import { getProjectRoots } from "../config.js";
+import { getProjectRoots, loadServerConfig, _clearCache } from "../config.js";
 
 const STATE_FILE = path.join(homedir(), ".opencode-telegram-instances.json");
 
@@ -90,8 +90,15 @@ function formatRole(role) {
   }
 }
 
-function printMessage(msg, stream) {
+function isToolMessage(msg) {
   const role = getMessageRole(msg);
+  return role === "tool";
+}
+
+function printMessage(msg, stream, { showToolCalls }) {
+  const role = getMessageRole(msg);
+  if (!showToolCalls && isToolMessage(msg)) return;
+
   const parts = getMessageText(msg);
 
   if (!parts.length) return;
@@ -110,6 +117,8 @@ function printMessage(msg, stream) {
 
 async function watchSession(projectPath, baseUrl, sessionId, intervalMs, stream = process.stderr) {
   let seenCount = 0;
+  _clearCache();
+  const showToolCalls = loadServerConfig().toolCallDisplay === true;
 
   // Get initial message count so we know where we start
   try {
@@ -117,7 +126,8 @@ async function watchSession(projectPath, baseUrl, sessionId, intervalMs, stream 
     seenCount = initial.length;
     if (initial.length > 0) {
       stream.write(`\n📡 Watching session ${sessionId}\n`);
-      stream.write(`📊 Starting from message ${seenCount} (current message count)\n\n`);
+      stream.write(`📊 Starting from message ${seenCount} (current message count)\n`);
+      stream.write(`🔧 Tool calls: ${showToolCalls ? "shown" : "hidden"}\n\n`);
     }
   } catch (err) {
     stream.write(`⚠️  Could not fetch initial messages: ${err?.message}\n`);
@@ -131,7 +141,7 @@ async function watchSession(projectPath, baseUrl, sessionId, intervalMs, stream 
         if (messages.length > seenCount) {
           const newMessages = messages.slice(seenCount);
           for (const msg of newMessages) {
-            printMessage(msg, stream);
+            printMessage(msg, stream, { showToolCalls });
           }
           seenCount = messages.length;
           stream.write("\n"); // blank line between message groups

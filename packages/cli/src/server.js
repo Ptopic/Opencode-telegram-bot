@@ -22,7 +22,7 @@ import {
   setActiveSession,
   setMode as dbSetMode,
 } from "./db.js";
-import { loadServerConfig } from "./config.js";
+import { loadServerConfig, _clearCache } from "./config.js";
 
 function jsonResponse(res, statusCode, data) {
   res.writeHead(statusCode, {
@@ -52,8 +52,6 @@ function parseBody(req) {
     req.on("error", reject);
   });
 }
-
-console.log("This is a test for code search");
 
 async function handleRequest(req, res) {
   // CORS preflight
@@ -351,6 +349,7 @@ async function handleRequest(req, res) {
       let emptyPolls = 0;
       const MAX_EMPTY_POLLS = 5;
       const emittedPermissionIds = new Set();
+      _clearCache();
       const showToolCalls = loadServerConfig().toolCallDisplay === true;
 
       const interval = setInterval(async () => {
@@ -364,7 +363,24 @@ async function handleRequest(req, res) {
             const newMessages = messages.slice(seenCount);
             for (const msg of newMessages) {
               const role = getMessageRole(msg);
-              if (!showToolCalls && role === "tool") continue;
+              if (!showToolCalls) {
+                // Case 1: Tool result messages (role: "tool")
+                if (role === "tool") continue;
+                // Case 2: Assistant messages containing tool_call parts
+                const parts = msg?.parts;
+                if (Array.isArray(parts)) {
+                  const hasToolCallParts = parts.some(
+                    (p) =>
+                      p &&
+                      typeof p === "object" &&
+                      (p.type === "tool_call" ||
+                        p.type === "tool_use" ||
+                        p.type === "function_call" ||
+                        p.type === "tool"),
+                  );
+                  if (hasToolCallParts) continue;
+                }
+              }
               const data = JSON.stringify({
                 type: "message",
                 role,
@@ -470,17 +486,42 @@ async function handleRequest(req, res) {
       });
 
       let finished = false;
+      _clearCache();
       const showToolCalls = loadServerConfig().toolCallDisplay === true;
 
       const sessionFilter = (event) => {
-        // Match events for our session — sessionID may be at top level or nested
-        const eventSessionId =
-          event?.sessionID ??
-          event?.sessionId ??
-          event?.session?.id ??
-          event?.info?.sessionID ??
-          null;
-        return String(eventSessionId) === String(sessionId);
+        const candidates = [
+          event?.sessionID,
+          event?.sessionId,
+          event?.session?.id,
+          event?.info?.sessionID,
+          event?.info?.sessionId,
+          event?.info?.session?.id,
+          event?.properties?.sessionID,
+          event?.properties?.sessionId,
+          event?.properties?.session?.id,
+          event?.properties?.info?.sessionID,
+          event?.properties?.info?.sessionId,
+          event?.properties?.message?.sessionID,
+          event?.properties?.message?.sessionId,
+          event?.properties?.message?.session?.id,
+          event?.syncEvent?.aggregateID,
+          event?.syncEvent?.data?.sessionID,
+          event?.syncEvent?.data?.sessionId,
+          event?.syncEvent?.data?.info?.sessionID,
+          event?.syncEvent?.data?.info?.sessionId,
+          event?.syncEvent?.data?.part?.sessionID,
+          event?.syncEvent?.data?.part?.sessionId,
+        ];
+
+        let sawCandidate = false;
+        for (const candidate of candidates) {
+          if (candidate == null) continue;
+          sawCandidate = true;
+          if (String(candidate) === String(sessionId)) return true;
+        }
+
+        return sawCandidate === false;
       };
 
       const parseSseFrame = (raw) => {
@@ -498,6 +539,19 @@ async function handleRequest(req, res) {
         } catch {
           return null;
         }
+      };
+
+      const unwrapSsePayload = (payload) => {
+        if (
+          payload &&
+          typeof payload === "object" &&
+          payload.payload &&
+          typeof payload.payload === "object"
+        ) {
+          return payload.payload;
+        }
+
+        return payload;
       };
 
       let buffer = "";
@@ -533,13 +587,18 @@ async function handleRequest(req, res) {
 
                 for (const frame of frames) {
                   if (finished) break;
-                  const event = parseSseFrame(frame);
-                  if (!event) continue;
+                  const rawEvent = parseSseFrame(frame);
+                  const event = unwrapSsePayload(rawEvent);
+                  if (!event || typeof event !== "object") continue;
 
                   const eventType =
                     typeof event.type === "string" ? event.type : "";
 
-                  if (eventType === "session.idle" && sessionFilter(event)) {
+                  if (!sessionFilter(event)) {
+                    continue;
+                  }
+
+                  if (eventType === "session.idle") {
                     if (!finished) {
                       finished = true;
                       const data = JSON.stringify({
@@ -600,13 +659,57 @@ async function handleRequest(req, res) {
                   }
 
                   if (!showToolCalls) {
-                    const msgRole =
-                      event?.properties?.message?.role ?? event?.role ?? "";
+                    // OpenCode tool stream events carry properties.part.type === "tool".
+                    // Filter them regardless of the outer event name.
+                    const partTypeCandidates = [
+                      event?.properties?.part?.type,
+                      event?.syncEvent?.data?.part?.type,
+                    ];
                     if (
-                      typeof msgRole === "string" &&
-                      msgRole.toLowerCase() === "tool"
-                    )
+                      partTypeCandidates.some(
+                        (partType) =>
+                          typeof partType === "string" &&
+                          partType.toLowerCase() === "tool",
+                      )
+                    ) {
                       continue;
+                    }
+
+                    // Case 2: Tool result messages (role: "tool")
+                    const roleCandidates = [
+                      event?.properties?.message?.role,
+                      event?.properties?.role,
+                      event?.role,
+                      event?.info?.role,
+                      event?.metadata?.role,
+                      event?.syncEvent?.data?.role,
+                      event?.syncEvent?.data?.info?.role,
+                    ];
+                    const isToolResult = roleCandidates.some(
+                      (v) =>
+                        typeof v === "string" && v.toLowerCase() === "tool",
+                    );
+                    if (isToolResult) continue;
+
+                    // Case 3: Assistant messages containing tool_call parts
+                    const parts =
+                      event?.properties?.message?.parts ??
+                      event?.properties?.parts ??
+                      event?.parts ??
+                      event?.syncEvent?.data?.message?.parts ??
+                      event?.syncEvent?.data?.parts;
+                    if (Array.isArray(parts)) {
+                      const hasToolCallParts = parts.some(
+                        (p) =>
+                          p &&
+                          typeof p === "object" &&
+                          (p.type === "tool_call" ||
+                            p.type === "tool_use" ||
+                            p.type === "function_call" ||
+                            p.type === "tool"),
+                      );
+                      if (hasToolCallParts) continue;
+                    }
                   }
 
                   const data = JSON.stringify({
