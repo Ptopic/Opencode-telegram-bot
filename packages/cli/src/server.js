@@ -297,7 +297,7 @@ async function handleRequest(req, res) {
 
       const payload = {
         parts: body.parts ?? [{ type: "text", text: body.text ?? "" }],
-        mode: body.mode ?? null,
+        mode: body.agent ?? body.mode ?? null,
       };
 
       // Fire-and-forget: don't await the workspace response.
