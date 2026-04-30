@@ -486,6 +486,9 @@ async function handleRequest(req, res) {
       });
 
       let finished = false;
+      let hasBackgroundTaskLaunch = false;
+      let waitingForBackgroundFollowup = false;
+      let awaitingFinalIdle = false;
       _clearCache();
       const showToolCalls = loadServerConfig().toolCallDisplay === true;
 
@@ -554,6 +557,15 @@ async function handleRequest(req, res) {
         return payload;
       };
 
+      const getPart = (event) =>
+        event?.properties?.part ?? event?.syncEvent?.data?.part ?? null;
+
+      const getStatusType = (event) => {
+        const status =
+          event?.properties?.status ?? event?.syncEvent?.data?.status ?? null;
+        return typeof status?.type === "string" ? status.type : "";
+      };
+
       let buffer = "";
 
       const stream = new ReadableStream({
@@ -593,12 +605,57 @@ async function handleRequest(req, res) {
 
                   const eventType =
                     typeof event.type === "string" ? event.type : "";
+                  const part = getPart(event);
+                  const statusType = getStatusType(event);
 
                   if (!sessionFilter(event)) {
                     continue;
                   }
 
+                  if (
+                    part &&
+                    typeof part === "object" &&
+                    part.type === "tool" &&
+                    part.tool === "task" &&
+                    part.state?.input?.run_in_background === true
+                  ) {
+                    hasBackgroundTaskLaunch = true;
+                  }
+
+                  if (waitingForBackgroundFollowup && statusType === "busy") {
+                    waitingForBackgroundFollowup = false;
+                    hasBackgroundTaskLaunch = false;
+                    awaitingFinalIdle = true;
+                  }
+
+                  if (eventType === "session.status" && statusType === "idle") {
+                    if (awaitingFinalIdle) {
+                      if (!finished) {
+                        finished = true;
+                        const data = JSON.stringify({
+                          type: "done",
+                          isFinished: true,
+                        });
+                        res.write(`data: ${data}\n\n`);
+                        setTimeout(() => {
+                          if (!res.writableEnded) res.end();
+                          controller.close();
+                        }, 2000);
+                      }
+                      continue;
+                    }
+                    if (hasBackgroundTaskLaunch || waitingForBackgroundFollowup) {
+                      waitingForBackgroundFollowup = true;
+                    }
+                    continue;
+                  }
+
                   if (eventType === "session.idle") {
+                    if (hasBackgroundTaskLaunch || waitingForBackgroundFollowup) {
+                      waitingForBackgroundFollowup = true;
+                      continue;
+                    }
+
                     if (!finished) {
                       finished = true;
                       const data = JSON.stringify({
