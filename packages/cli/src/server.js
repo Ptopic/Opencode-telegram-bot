@@ -295,9 +295,25 @@ async function handleRequest(req, res) {
         return errorResponse(res, 404, "No running instance for this project");
       }
 
+      // If a mode/agent is specified, switch the workspace session's agent first.
+      // The workspace ignores `mode` in the POST body — it requires a separate
+      // call to POST /session/{id}/mode to actually change the agent.
+      const requestedMode = body.agent ?? body.mode ?? null;
+      if (requestedMode !== null) {
+        let resolvedMode = requestedMode;
+        const modeIndex = parseInt(requestedMode, 10);
+        if (!isNaN(modeIndex) && modeIndex >= 0) {
+          const modes = await listModes(instance.base_url);
+          if (modeIndex >= 0 && modeIndex < modes.length) {
+            resolvedMode = modes[modeIndex].name;
+          }
+        }
+        console.log(`[DEBUG] Switching session ${sessionId} mode to: ${resolvedMode}`);
+        await setMode(instance.base_url, sessionId, resolvedMode);
+      }
+
       const payload = {
         parts: body.parts ?? [{ type: "text", text: body.text ?? "" }],
-        mode: body.agent ?? body.mode ?? null,
       };
       console.log(`[DEBUG] /session/${sessionId}/message proxy payload:`, JSON.stringify(payload));
 
