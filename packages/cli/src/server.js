@@ -24,6 +24,22 @@ import {
 } from "./db.js";
 import { loadServerConfig, _clearCache } from "./config.js";
 
+async function resolveProjectPath(rawPath) {
+  let path = decodeURIComponent(rawPath);
+  if (!path.startsWith("/")) path = "/" + path;
+  if (await getInstance(path)) return path;
+  const instances = await listInstances();
+  const lower = path.toLowerCase();
+  const match = instances.find((inst) => inst.project_path.toLowerCase().endsWith(lower));
+  if (match) return match.project_path;
+  const byLabel = instances.find((inst) => {
+    const dir = inst.project_path.split("/").pop() ?? "";
+    return dir.toLowerCase() === lower.replace(/^\//, "");
+  });
+  if (byLabel) return byLabel.project_path;
+  return path;
+}
+
 function jsonResponse(res, statusCode, data) {
   res.writeHead(statusCode, {
     "Content-Type": "application/json",
@@ -166,9 +182,7 @@ async function handleRequest(req, res) {
 
     // ── GET /sessions/:project ──────────────────────────────────────────────
     if (pathname.startsWith("/sessions/") && method === "GET") {
-      const projectPath = decodeURIComponent(
-        pathname.slice("/sessions/".length),
-      );
+      const projectPath = await resolveProjectPath(pathname.slice("/sessions/".length));
       const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {
@@ -221,11 +235,12 @@ async function handleRequest(req, res) {
     // ── POST /send ─────────────────────────────────────────────────────────
     if (pathname === "/send" && method === "POST") {
       const body = await parseBody(req);
-      const { project: projectPath, sessionId, prompt, agent } = body;
+      const { project: rawProject, sessionId, prompt, agent } = body;
 
       if (!prompt)
         return errorResponse(res, 400, "Missing 'prompt' in request body");
 
+      const projectPath = await resolveProjectPath(rawProject ?? "");
       const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {
@@ -315,7 +330,7 @@ async function handleRequest(req, res) {
 
     // ── GET /watch/:project ────────────────────────────────────────────────
     if (pathname.startsWith("/watch/") && method === "GET") {
-      const projectPath = decodeURIComponent(pathname.slice("/watch/".length));
+      const projectPath = await resolveProjectPath(pathname.slice("/watch/".length));
       const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {
@@ -440,7 +455,11 @@ async function handleRequest(req, res) {
                   sessionID: perm.sessionID ?? perm.sessionId ?? sessionId,
                   permission: perm.permission ?? null,
                   patterns: Array.isArray(perm.patterns) ? perm.patterns : [],
-                  tool: perm.tool ?? perm.toolName ?? perm.permission ?? null,
+                  tool:
+                    (typeof perm.tool === "string" ? perm.tool : null) ??
+                    perm.toolName ??
+                    (typeof perm.permission === "string" ? perm.permission : null) ??
+                    null,
                   metadata: perm.metadata ?? {},
                 };
                 res.write(`data: ${JSON.stringify(permEvent)}\n\n`);
@@ -481,9 +500,7 @@ async function handleRequest(req, res) {
     // the session is truly finished (vs the polling-based /watch/:project
     // which can premature-close when OpenCode adds follow-up user messages).
     if (pathname.startsWith("/watch-native/") && method === "GET") {
-      const projectPath = decodeURIComponent(
-        pathname.slice("/watch-native/".length),
-      );
+      const projectPath = await resolveProjectPath(pathname.slice("/watch-native/".length));
       const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {
@@ -632,6 +649,51 @@ async function handleRequest(req, res) {
                   const part = getPart(event);
                   const statusType = getStatusType(event);
 
+                  // ── Permission events (before session filter) ────────────────
+                  // These MUST be emitted regardless of sessionFilter — they are
+                  // critical control events that consumers (Telegram bots, etc.)
+                  // rely on to render approval/deny UI.  The sessionFilter was
+                  // inadvertently blocking them when permission events carry a
+                  // session ID in a location not covered by the candidates array.
+                  if (eventType === "permission.asked") {
+                    const props = event.properties ?? event;
+                    const permPayload = {
+                      id: props.id ?? props.permissionID ?? null,
+                      sessionID: props.sessionID ?? props.sessionId ?? null,
+                      permission: props.permission ?? null,
+                      patterns: Array.isArray(props.patterns)
+                        ? props.patterns
+                        : [],
+                      tool:
+                        (typeof props.tool === "string" ? props.tool : null) ??
+                        props.toolName ??
+                        (typeof props.permission === "string" ? props.permission : null) ??
+                        null,
+                      metadata: props.metadata ?? {},
+                    };
+                    const data = JSON.stringify({
+                      type: "permission.asked",
+                      payload: permPayload,
+                    });
+                    res.write(`data: ${data}\n\n`);
+                    continue;
+                  }
+
+                  if (eventType === "permission.replied") {
+                    const props = event.properties ?? event;
+                    const permReplyPayload = {
+                      id: props.id ?? props.permissionID ?? null,
+                      sessionID: props.sessionID ?? props.sessionId ?? null,
+                      reply: props.reply ?? props.response ?? null,
+                    };
+                    const data = JSON.stringify({
+                      type: "permission.replied",
+                      payload: permReplyPayload,
+                    });
+                    res.write(`data: ${data}\n\n`);
+                    continue;
+                  }
+
                   if (!sessionFilter(event)) {
                     continue;
                   }
@@ -695,47 +757,6 @@ async function handleRequest(req, res) {
                         controller.close();
                       }, 2000);
                     }
-                    continue;
-                  }
-
-                  // ── Permission events ──────────────────────────────────────────
-                  // Emit as first-class "permission.asked" events so consumers
-                  // (OpenClaw skills, Telegram bots, etc.) can detect them and
-                  // render approval/deny buttons.  The payload includes the
-                  // permission ID, session ID, tool name and patterns needed to
-                  // POST a reply back to OpenCode.
-                  if (eventType === "permission.asked") {
-                    const props = event.properties ?? event;
-                    const permEvent = {
-                      type: "permission.asked",
-                      id: props.id ?? props.permissionID ?? null,
-                      sessionID: props.sessionID ?? props.sessionId ?? null,
-                      permission: props.permission ?? null,
-                      patterns: Array.isArray(props.patterns)
-                        ? props.patterns
-                        : [],
-                      tool:
-                        props.tool ??
-                        props.toolName ??
-                        props.permission ??
-                        null,
-                      metadata: props.metadata ?? {},
-                    };
-                    const data = JSON.stringify(permEvent);
-                    res.write(`data: ${data}\n\n`);
-                    continue;
-                  }
-
-                  if (eventType === "permission.replied") {
-                    const props = event.properties ?? event;
-                    const permReplyEvent = {
-                      type: "permission.replied",
-                      id: props.id ?? props.permissionID ?? null,
-                      sessionID: props.sessionID ?? props.sessionId ?? null,
-                      reply: props.reply ?? props.response ?? null,
-                    };
-                    const data = JSON.stringify(permReplyEvent);
-                    res.write(`data: ${data}\n\n`);
                     continue;
                   }
 
@@ -1091,8 +1112,9 @@ async function handleRequest(req, res) {
     // ── POST /stop ────────────────────────────────────────────────────────
     if (pathname === "/stop" && method === "POST") {
       const body = await parseBody(req);
-      const { project: projectPath, sessionId } = body;
+      const { project: rawProject, sessionId } = body;
 
+      const projectPath = await resolveProjectPath(rawProject ?? "");
       const instance = await getInstance(projectPath);
 
       if (!instance || instance.status !== "ready") {

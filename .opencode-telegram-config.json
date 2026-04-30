@@ -6,5 +6,5 @@
   "graphWeight": 0.15,
   "summaryWeight": 0.25,
   "toolCallDisplay": true,
-  "hiddenTools": ["write", "edit", "background_output"]
+  "hiddenTools": ["write", "edit", "background_output", "todowrite", "lsp_diagnostics"]
 }
