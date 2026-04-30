@@ -311,7 +311,6 @@ async function handleRequest(req, res) {
             resolvedMode = modes[modeIndex].name;
           }
         }
-        console.log(`[DEBUG] Switching session ${sessionId} mode to: ${resolvedMode}`);
         await setMode(instance.base_url, sessionId, resolvedMode);
       }
 
@@ -321,7 +320,6 @@ async function handleRequest(req, res) {
       if (resolvedMode !== null) {
         payload.agent = resolvedMode;
       }
-      console.log(`[DEBUG] /session/${sessionId}/message proxy payload:`, JSON.stringify(payload));
 
       // Fire-and-forget: don't await the workspace response.
       // Detach the request so the proxy returns 202 immediately.
