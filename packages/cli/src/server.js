@@ -299,6 +299,7 @@ async function handleRequest(req, res) {
         parts: body.parts ?? [{ type: "text", text: body.text ?? "" }],
         mode: body.agent ?? body.mode ?? null,
       };
+      console.log(`[DEBUG] /session/${sessionId}/message proxy payload:`, JSON.stringify(payload));
 
       // Fire-and-forget: don't await the workspace response.
       // Detach the request so the proxy returns 202 immediately.
