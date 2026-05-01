@@ -55,15 +55,14 @@ export const normalCategories = [
 //
 // Policy: allow ALL tools by default, then deny or restrict specific ones.
 //
-// `deniedTools`  → set to `false` in tools + `"deny"` in permission (hard block)
-// `askTools`     → set to `"ask"` in permission only (user confirmation required)
+// `deniedTools`   → set to `false` in tools + `"deny"` in permission (hard block)
+// `askTools`      → reserved list of tools to mark as `"ask"` later
+// `bashRules`     → command-pattern permission map for the bash tool
 //
 // These apply to EVERY agent + the top-level config.
 //
 export const deniedTools = [
-  // Shell-based search (use code-search instead)
-  "grep",
-  "rg",
+  // AST-based search (use code-search instead)
   "ast_grep_search",
   "ast_grep_replace",
 
@@ -74,9 +73,13 @@ export const deniedTools = [
   "websearch_web_search_exa",
 ];
 
-export const askTools = [
-  "bash",
-];
+export const askTools = [];
+
+export const bashRules = {
+  "*": "ask",
+  "bx": "allow",
+  "bx *": "allow",
+};
 
 // ─── Agent Skills ──────────────────────────────────────────────────────────────
 //
@@ -114,11 +117,11 @@ const CODE_SEARCH_TOOLS_LIST = `
 - code_search_code_watch_start - Start watching paths for changes
 - code_search_code_watch_stop - Stop watching paths
 - code_search_code_dead_code - Find potentially dead code
-- read - Read file contents (use after code-search finds exact file paths)`;
+- read - Read file contents (use after code-search finds exact file paths)
+- grep / rg - only use after code_search returns exact file paths or results, for narrowing to a specific section`;
 
 const PROHIBITED_TOOLS = `
 ## PROHIBITED TOOLS (NEVER use — blocked at config level)
-- grep, rg - use code_search instead
 - ast_grep_search, ast_grep_replace - use code_search instead
 - MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead`;
 
@@ -127,6 +130,7 @@ const WEB_SEARCH_POLICY = `
 - For ALL web searches, you MUST use the \`bx\` command (Brave Search CLI) via the \`bx\` skill.
 - NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.
 - The ONLY permitted web search method is \`bx\` — use \`bx "query"\` for RAG/grounding, \`bx answers "query"\` for synthesized answers, \`bx web "query"\` for traditional search results, \`bx news "query"\` for news, etc.
+- Bash is restricted to \`bx\` commands only. Do not use bash for any non-\`bx\` command.
 - If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.`;
 
 export const agentPrompts = {
@@ -134,7 +138,7 @@ export const agentPrompts = {
 
   sisyphus: `
 ## Tool policy
-You MUST use only code-search and read tools for ALL code discovery. NEVER use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash search, or any shell-based discovery tools. If code must be located, first use code_search_code_search, then use read for file contents. When delegating tasks to subagents, always instruct them to use only code-search and read tools - never allow glob, grep, bash, find, ast_grep_search, ast_grep_replace, or similar search tools.
+You MUST use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. Do NOT use glob, find, fd, ls, cat, sed, awk, bash search, ast_grep_search, ast_grep_replace, or similar tools for initial discovery. When delegating tasks to subagents, instruct them to follow the same code_search-first workflow.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
 ${WEB_SEARCH_POLICY}
@@ -143,7 +147,7 @@ ${WEB_SEARCH_POLICY}
 
   ultrawork: `
 ## Tool policy
-Use ONLY code-search and read tools for repository inspection. NEVER use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based discovery. Translate every code lookup need into a code_search query first. If code-search returns insufficient results, use read on specific file paths, never search with shell tools.
+Use code_search first for repository inspection. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
 ${WEB_SEARCH_POLICY}
@@ -151,7 +155,7 @@ ${WEB_SEARCH_POLICY}
 
   explore: `
 ## Tool policy
-Use ONLY code-search tools and read for code discovery. NEVER use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery. Use code_search_code_search for finding code, code_search_code_graph_* for dependency analysis, and read for file contents only after code-search returns exact file paths.
+Use code_search for initial code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
 ${WEB_SEARCH_POLICY}
@@ -159,7 +163,7 @@ ${WEB_SEARCH_POLICY}
 
   general: `
 ## Repository inspection workflow
-Use ONLY code-search and read for code discovery. Do NOT use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based search. Search first with code_search, then read exact files or specific line ranges.
+Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. Do NOT use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based tool for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
 ${WEB_SEARCH_POLICY}
@@ -167,12 +171,13 @@ ${WEB_SEARCH_POLICY}
 When you need to find code:
 1. Use code-search_code_search with natural language query
 2. Use code-search_code_graph_* for dependency relationships
-3. Use read only when you have exact file paths from code-search results
+3. Use read for file contents once you have exact file paths from code-search results
+4. Use grep/rg only as a follow-up filter on those returned results or files
  `,
 
   oracle: `
 ## Repository inspection workflow
-Base ALL code analysis ONLY on code-search and read tools. Do NOT request or use grep, ripgrep, rg, glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based discovery. Use code_search_code_search for semantic code discovery, code_search_code_graph_* for dependency analysis, and read for file contents.
+Base code analysis on a code_search-first workflow. Only after code_search returns exact file paths or results may grep or rg be used to narrow to a specific section. Do NOT request or use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based tool for initial discovery.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
 ${WEB_SEARCH_POLICY}
@@ -182,7 +187,7 @@ When debugging or analyzing architecture, always start with code-search to under
 
   librarian: `
 ## Repository inspection workflow
-Use ONLY code-search and read for code/document discovery within this repository. Never use grep, glob, list, bash, find, fd, rg, ls, cat, sed, awk, ast_grep_search, ast_grep_replace, or shell discovery. Code discovery within this project must use code_search first.
+Use code_search first for code/document discovery within this repository. Only after code_search returns exact file paths or results may grep or rg be used to narrow to a specific section. Never use glob, list, bash, find, fd, ls, cat, sed, awk, ast_grep_search, ast_grep_replace, or shell discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
 ${WEB_SEARCH_POLICY}

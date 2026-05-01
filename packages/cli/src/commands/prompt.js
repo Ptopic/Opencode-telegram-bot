@@ -63,7 +63,7 @@ async function loadConfig() {
   const mod = await import(configUrl);
   return {
     deniedTools: mod.deniedTools || [],
-    askTools: mod.askTools || [],
+    bashRules: mod.bashRules || {},
     agentSkills: mod.agentSkills || {},
     agentPrompts: mod.agentPrompts || {},
     models: mod.models || {},
@@ -81,21 +81,16 @@ function applyConfigToJsonc(data, config) {
   const deniedPermEntries = Object.fromEntries(
     config.deniedTools.map((tool) => [tool, "deny"])
   );
-  const askPermEntries = Object.fromEntries(
-    config.askTools.map((tool) => [tool, "ask"])
-  );
-
-  // Top-level: deny listed tools, ask for restricted tools
+  
   data.tools = { ...data.tools, ...deniedToolEntries };
   data.permission = {
     ...data.permission,
     ...deniedPermEntries,
-    ...askPermEntries,
+    bash: config.bashRules,
   };
 
   if (data.agents) {
     for (const [agentName, agentConfig] of Object.entries(data.agents)) {
-      // Deny listed tools, ask for restricted tools — everything else allowed
       agentConfig.tools = {
         ...agentConfig.tools,
         ...deniedToolEntries,
@@ -104,7 +99,7 @@ function applyConfigToJsonc(data, config) {
       agentConfig.permission = {
         ...agentConfig.permission,
         ...deniedPermEntries,
-        ...askPermEntries,
+        bash: config.bashRules,
       };
 
       if (config.agentPrompts[agentName]) {
@@ -146,11 +141,17 @@ export async function promptCommand(targetPath) {
   try {
     mkdirSync(opencodeDir, { recursive: true });
     cpSync(SOURCE_DIR, opencodeDir, { recursive: true, overwrite: true });
+    const config = await loadConfig();
 
     const opencodeJsonPath = path.join(opencodeDir, "opencode.json");
     const sourceConfig = JSON.parse(readFileSync(path.join(SOURCE_DIR, "opencode.json"), "utf8"));
     const existingConfig = existsSync(opencodeJsonPath) ? JSON.parse(readFileSync(opencodeJsonPath, "utf8")) : null;
     const nextConfig = existingConfig ? mergeConfig(existingConfig, sourceConfig) : sourceConfig;
+    nextConfig.permission = {
+      ...nextConfig.permission,
+      ...Object.fromEntries(config.deniedTools.map((tool) => [tool, "deny"])),
+      bash: config.bashRules,
+    };
     writeFileSync(opencodeJsonPath, JSON.stringify(nextConfig, null, 2));
     console.log(`${existingConfig ? "Updated" : "Created"}: ${opencodeJsonPath}`);
     console.log(`${existingConfig ? "Updated" : "Created"}: ${opencodeDir}/ (full directory)`);
@@ -158,7 +159,6 @@ export async function promptCommand(targetPath) {
     // ── Merge config.mjs into oh-my-openagent.jsonc ──────────────────────
     const agentJsoncPath = path.join(opencodeDir, "oh-my-openagent.jsonc");
     if (existsSync(agentJsoncPath)) {
-      const config = await loadConfig();
       const raw = readFileSync(agentJsoncPath, "utf8");
       const data = parseJsonc(raw);
       applyConfigToJsonc(data, config);
@@ -166,7 +166,7 @@ export async function promptCommand(targetPath) {
       console.log(`Merged config.mjs → ${agentJsoncPath}`);
       console.log(`  models:       smart=${config.models.smart}, normal=${config.models.normal}`);
       console.log(`  deniedTools:  [${config.deniedTools.join(", ")}]`);
-      console.log(`  askTools:     [${config.askTools.join(", ")}]`);
+      console.log(`  bashRules:    ${JSON.stringify(config.bashRules)}`);
       console.log(`  agentSkills:  ${Object.entries(config.agentSkills).map(([k, v]) => `${k}: [${v.join(", ")}]`).join(", ")}`);
       console.log(`  agentPrompts: [${Object.keys(config.agentPrompts).join(", ")}]`);
     }
