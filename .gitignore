@@ -2,6 +2,7 @@ node_modules/
 .pnpm-store/
 dist/
 *.log
+data/
 package-lock.json
 .env
 .env.local

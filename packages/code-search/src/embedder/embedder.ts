@@ -18,10 +18,10 @@ interface OpenAIResponse {
 
 function extractRetryWaitMsFromRateLimitMessage(errorMessage: string): number | null {
   const match = errorMessage.match(/try again in (\d+)\s*ms/i);
-  if (match) return parseInt(match[1], 10);
+  if (match?.[1]) return parseInt(match[1], 10);
   // Also handle "try again in X.Xs" format
   const secMatch = errorMessage.match(/try again in ([\d.]+)\s*s/i);
-  if (secMatch) return Math.ceil(parseFloat(secMatch[1]) * 1000);
+  if (secMatch?.[1]) return Math.ceil(parseFloat(secMatch[1]) * 1000);
   return null;
 }
 

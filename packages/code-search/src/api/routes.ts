@@ -118,14 +118,14 @@ export function createSearchRouter(engine: CodeSearchEngine): Router {
 export function createGraphRouter(engine: CodeSearchEngine): Router {
   const router = Router();
 
-  router.get('/search', async (req: Request, res: Response) => {
+  router.get('/file', async (req: Request, res: Response) => {
     try {
-      const { q } = req.query;
-      if (!q || typeof q !== 'string') {
-        res.status(400).json({ error: 'q (query) parameter required' });
+      const { path } = req.query;
+      if (!path || typeof path !== 'string') {
+        res.status(400).json({ error: 'path query parameter required' });
         return;
       }
-      const nodes = await engine.getGraphNodeByFile(q);
+      const nodes = await engine.getGraphNodeByFile(path);
       res.json({ success: true, nodes });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
@@ -194,3 +194,4 @@ export function createGraphRouter(engine: CodeSearchEngine): Router {
 
   return router;
 }
+

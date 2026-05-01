@@ -3,6 +3,9 @@ import { ChunkManager } from './chunker/chunk-manager.js';
 import { Embedder } from './embedder/embedder.js';
 import { FileWatcher } from './watcher/file-watcher.js';
 import { ChunkSummarizer } from './summarizer/summarizer.js';
+// WATCH_TEST_MARKER: Hermestest2026 console.log("WATCH_TEST_2026_05_01");
+// FRESH_MARKER_TEST: console.log("FRESH_WATCH_TEST_2026_05_01");
+// ROUNDTRIP_TEST: console.log("WATCH_REINDEX_2026_05_01_1234");
 import { exactSearch } from './search/exact-search.js';
 import type { SearchOptions, IndexOptions, ProjectStats, SearchResult, CodeChunk } from './types.js';
 import type { Node, Context } from './graph/types.js';
@@ -135,7 +138,7 @@ export class CodeSearchEngine {
       });
 
       const results: SearchResult[] = exactResults
-        .filter(r => r.score >= 0.5)
+        .filter(r => r.score >= 0.3)
         .map(r => {
           const chunk = allChunksForExact.find(c => c.id === r.chunkId)!;
           return {
@@ -452,3 +455,4 @@ export class CodeSearchEngine {
     return children;
   }
 }
+

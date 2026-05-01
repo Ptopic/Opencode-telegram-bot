@@ -128,3 +128,4 @@ const STOP_WORDS = new Set([
   'protected', 'interface', 'type', 'extends', 'implements', 'new', 'try',
   'catch', 'throw', 'finally', 'null', 'undefined', 'true', 'false',
 ]);
+
