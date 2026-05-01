@@ -26,13 +26,15 @@ You have access to the code-search MCP server which provides semantic code searc
 1. Use `code-search_code_search` with a natural language query to find code
 2. Use `code-search_code_graph_*` tools for dependency analysis
 3. Use `read` to view specific files after finding them
+4. Use `grep` / `rg` only after `code-search` returns exact file paths or relevant results, and only to narrow to a specific section
 
 ## Workflow
 
 1. `code-search_code_search(query="what you're looking for")`
 2. `code-search_code_graph_callers(qualifiedName="module.functionName")` for dependencies
 3. `read(filePath="path/to/file.ts")` to view files
+4. `grep` / `rg` only as a follow-up filter on those returned files or results when needed
 
-## Prohibition
+## Restrictions
 
-NEVER use grep, ripgrep, rg, glob, find, ls, cat, sed, awk, or bash for code discovery. Always use code-search tools first.
+Always use code-search tools first for code discovery. Do not use glob, find, ls, cat, sed, awk, or bash for initial discovery. `grep` / `rg` are allowed only after code-search returns exact file paths or relevant results, for narrowing to a specific section.
