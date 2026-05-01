@@ -57,12 +57,6 @@ export class Embedder {
   async initialize(): Promise<void> {
     this.apiKey = this.config.apiKey ?? process.env.OPENAI_API_KEY ?? '';
     this.model = this.config.model ?? 'text-embedding-3-large';
-
-    console.log('[Embedder] provider:', this.config.provider);
-    console.log('[Embedder] apiKey:', this.apiKey ? 'set' : 'MISSING');
-    console.log('[Embedder] model:', this.model);
-    console.log('[Embedder] batchSize:', this.batchSize, 'maxRetries:', this.maxRetries, 'interBatchDelayMs:', this.interBatchDelayMs);
-    if (!this.apiKey) throw new Error('OPENAI_API_KEY is required for OpenAI provider');
   }
 
   private async embedOpenAI(texts: string[]): Promise<number[][]> {
