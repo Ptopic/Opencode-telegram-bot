@@ -53,6 +53,10 @@ const CODE_SEARCH_TOOLS = [
           items: { type: 'string' },
           description: 'Filter by chunk types: function, class, module, block, file',
         },
+        exactSearch: {
+          type: 'boolean',
+          description: 'Use pure exact substring matching instead of semantic search. Set true when searching for literal strings (e.g., console.log("test"), specific variable names, exact error messages).',
+        },
       },
       required: ['query'],
     },
@@ -312,11 +316,12 @@ class CodeSearchMCPServer {
   }
 
   private async handleSearch(input: SearchInput) {
-    const { query, projectPath, limit, threshold, language, filePath, chunkTypes } = input;
+    const { query, projectPath, limit, threshold, exactSearch, language, filePath, chunkTypes } = input;
 
     const results = await this.client.search(query, projectPath, {
       limit: limit ?? 10,
       threshold,
+      exactSearch,
       filters: {
         language,
         filePath,

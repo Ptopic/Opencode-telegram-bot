@@ -9,7 +9,7 @@ You have access to the code-search MCP server which provides semantic code searc
 
 ## Available Tools
 
-- `code_search` - Semantic code search using natural language queries
+- `code_search` - Semantic code search using natural language queries. Supports `exactSearch` param for grep-like literal substring matching.
 - `code_index` - Index code paths for search
 - `code_stats` - Get statistics about the code index
 - `code_remove_index` - Remove a path from the index
@@ -21,19 +21,47 @@ You have access to the code-search MCP server which provides semantic code searc
 - `code_graph_callees` - Find all functions called by a specific function
 - `code_dead_code` - Find potentially dead code
 
+## Search Modes
+
+### Semantic Search (default)
+Use for: "How does authentication work?", "React component that handles form submission", "error handling pattern"
+```
+code-search_code_search(query="function that parses JSON")
+```
+
+### Exact Search (`exactSearch=true`)
+Use for: literal string searches — specific variable names, exact error messages, quoted strings, code patterns.
+Behaves like grep: pure substring matching, no fuzzy/term fallbacks.
+```
+code-search_code_search(query='console.log("test log for agent")', exactSearch=true)
+code-search_code_search(query="ERR_UNHANDLED_REJECTION", exactSearch=true)
+code-search_code_search(query="export function authenticate", exactSearch=true)
+```
+
+**When to use `exactSearch=true`:**
+- Searching for a specific string literal, error message, or variable name
+- Looking for an exact function signature or code pattern
+- You need grep-like precision, not semantic similarity
+
+**When NOT to use `exactSearch=true`:**
+- Conceptual searches ("how is auth implemented?")
+- When you don't know the exact string
+
 ## Usage
 
 1. Use `code-search_code_search` with a natural language query to find code
-2. Use `code-search_code_graph_*` tools for dependency analysis
-3. Use `read` to view specific files after finding them
-4. Use `grep` / `rg` only after `code-search` returns exact file paths or relevant results, and only to narrow to a specific section
+2. Use `code-search_code_search` with `exactSearch=true` for literal substring matching
+3. Use `code-search_code_graph_*` tools for dependency analysis
+4. Use `read` to view specific files after finding them
+5. Use `grep` / `rg` only after `code-search` returns exact file paths or relevant results, and only to narrow to a specific section
 
 ## Workflow
 
-1. `code-search_code_search(query="what you're looking for")`
-2. `code-search_code_graph_callers(qualifiedName="module.functionName")` for dependencies
-3. `read(filePath="path/to/file.ts")` to view files
-4. `grep` / `rg` only as a follow-up filter on those returned files or results when needed
+1. `code-search_code_search(query="what you're looking for")` for semantic search
+2. `code-search_code_search(query="exact string", exactSearch=true)` for literal matching
+3. `code-search_code_graph_callers(qualifiedName="module.functionName")` for dependencies
+4. `read(filePath="path/to/file.ts")` to view files
+5. `grep` / `rg` only as a follow-up filter on those returned files or results when needed
 
 ## Restrictions
 

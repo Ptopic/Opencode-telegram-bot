@@ -26,6 +26,8 @@ export interface ExactSearchOptions {
   fuzzy?: boolean;
   /** Fuzzy threshold (0-1). Default: 0.7 */
   fuzzyThreshold?: number;
+  /** Grep-like literal mode: pure substring match, no term/fuzzy fallbacks. Default: false */
+  literal?: boolean;
 }
 
 interface ChunkWithId {
@@ -173,12 +175,34 @@ export function exactSearch(
     limit = 20,
     fuzzy = true,
     fuzzyThreshold = 0.7,
+    literal = false,
   } = options;
 
   if (!query.trim() || chunks.length === 0) return [];
 
   const pattern = detectPattern(query);
   const results: ExactSearchResult[] = [];
+
+  if (literal) {
+    const normalizedQuery = query.trim();
+    for (const chunk of chunks) {
+      const { found, offset } = containsSubstring(chunk.content, normalizedQuery);
+      if (found) {
+        const score = Math.min(1, normalizedQuery.length / chunk.content.length + 0.5);
+        const endOffset = Math.min(offset + normalizedQuery.length + 40, chunk.content.length);
+        const startOffset = Math.max(0, offset - 20);
+        results.push({
+          chunkId: chunk.id,
+          score,
+          matchType: 'exact',
+          matchedText: chunk.content.substring(offset, offset + normalizedQuery.length),
+          offset,
+        });
+      }
+    }
+    results.sort((a, b) => b.score - a.score);
+    return results.slice(0, limit);
+  }
 
   for (const chunk of chunks) {
     const content = chunk.content;

@@ -36,6 +36,7 @@ export interface SearchOptions {
   limit?: number;
   threshold?: number;
   projectPath?: string;
+  exactSearch?: boolean;
   filters?: SearchFilters;
 }
 
@@ -89,6 +90,7 @@ export interface SearchInput {
   projectPath?: string;
   limit?: number;
   threshold?: number;
+  exactSearch?: boolean;
   language?: string;
   filePath?: string;
   chunkTypes?: ChunkType[];

@@ -134,7 +134,8 @@ export class CodeSearchEngine {
       const exactResults = exactSearch(query, allChunksForExact, {
         threshold: 0.25,
         limit: options?.limit ?? 10,
-        fuzzy: true,
+        fuzzy: false,
+        literal: true,
       });
 
       const results: SearchResult[] = exactResults

@@ -43,18 +43,39 @@ export class CodeSearchClient {
   }
 
   /**
-   * Search for code chunks matching a query
+   * Search for code chunks matching a query (hybrid semantic + exact)
    */
   async search(
     query: string,
     projectPath: string | undefined,
     options?: SearchOptions
   ): Promise<SearchResult[]> {
+    if (options?.exactSearch) {
+      return this.exactSearch(query, projectPath, options);
+    }
+
     const response = await this.client.post<
       { success: boolean; results: SearchResult[]; error?: string }
     >('/api/search/search', { query, projectPath, options });
     if (!response.data.success) {
       throw new Error(response.data.error || 'Search operation failed');
+    }
+    return response.data.results || [];
+  }
+
+  /**
+   * Exact string search — skips vector/hybrid search, uses pure substring matching
+   */
+  async exactSearch(
+    query: string,
+    projectPath: string | undefined,
+    options?: SearchOptions
+  ): Promise<SearchResult[]> {
+    const response = await this.client.post<
+      { success: boolean; results: SearchResult[]; error?: string }
+    >('/api/search/search/exact', { query, projectPath, options });
+    if (!response.data.success) {
+      throw new Error(response.data.error || 'Exact search operation failed');
     }
     return response.data.results || [];
   }
