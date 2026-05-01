@@ -58,6 +58,10 @@ export class Database {
   private nodesTable: any = null;
   private edgesTable: any = null;
 
+  // Pre-indexed BM25 — built once per project, reused across searches
+  private bm25Cache: Map<string, { bm25: BM25; chunkIds: string[]; chunkIndexToId: Map<number, string> }> = new Map();
+  private currentBm25ProjectPath: string = '';
+
   constructor(config: DBConfig) {
     this.uri = config.uri;
     this.codeChunksTable = config.codeChunksTable ?? CODE_CHUNKS_TABLE;
@@ -238,6 +242,9 @@ export class Database {
       }
     }
 
+    // Invalidate BM25 cache since chunk data changed
+    this.invalidateBm25Cache();
+
     try {
       await this.chunksTable.createIndex('vector', {
         config: lancedb.Index.ivfPq({}),
@@ -286,7 +293,9 @@ export class Database {
         parentId: row.parentId,
         metadata: JSON.parse(row.metadata ?? '{}'),
       },
-      score: row._distance ?? 0,
+      // LanceDB IVF-PQ returns cosine distance: 0 = identical, 2 = opposite
+      // Normalize to [0,1] where 1 = best match using 1/(1+distance)
+      score: row._distance !== undefined ? 1 / (1 + row._distance) : 0,
       query: '',
       highlights: [],
     }));
@@ -346,7 +355,9 @@ export class Database {
     const finalResults: SearchResult[] = [];
 
     for (const row of contentResults) {
-      const contentScore = row._distance !== undefined ? 1 - row._distance : 0;
+      // LanceDB IVF-PQ returns cosine distance: 0 = identical, 2 = opposite
+      // Normalize to [0,1] where 1 = best match using 1/(1+distance)
+      const contentScore = row._distance !== undefined ? 1 / (1 + row._distance) : 0;
 
       let summaryScore = 0;
       if (row.summaryVectorJson) {
@@ -676,16 +687,20 @@ export class Database {
 
     if (allChunks.length === 0) return [];
 
-    const bm25 = new BM25();
-    const contents = allChunks.map((row: any) => row.content as string);
-    bm25.index(contents);
+    // Use pre-indexed BM25 for this project
+    const { bm25, chunkIndexToId: bm25ChunkIndex } = await this.getOrBuildBm25Index(projectPath, options?.filters);
 
     const bm25Results = bm25.search(queryText, maxResults);
     const bm25ScoreMap = new Map<number, number>();
     const firstBm25Result = bm25Results[0];
     const maxBm25 = firstBm25Result ? firstBm25Result.score : 1;
     for (const r of bm25Results) {
-      bm25ScoreMap.set(r.index, r.score / maxBm25);
+      // r.index is relative to the filtered chunks; map via chunkIndexToId
+      const chunkId = bm25ChunkIndex.get(r.index);
+      const allChunkIdx = allChunks.findIndex((c: any) => c.id === chunkId);
+      if (allChunkIdx !== -1) {
+        bm25ScoreMap.set(allChunkIdx, r.score / maxBm25);
+      }
     }
 
     const nodeMap = new Map<string, { id: string; qualifiedName: string }>();
@@ -807,16 +822,19 @@ export class Database {
 
     if (allChunks.length === 0) return [];
 
-    const bm25 = new BM25();
-    const contents = allChunks.map((row: any) => row.content as string);
-    bm25.index(contents);
+    // Use pre-indexed BM25 for this project
+    const { bm25, chunkIndexToId: bm25ChunkIndex } = await this.getOrBuildBm25Index(projectPath, options?.filters);
 
     const bm25Results = bm25.search(queryText, maxResults);
     const bm25ScoreMap = new Map<number, number>();
     const firstBm25Result = bm25Results[0];
     const maxBm25 = firstBm25Result ? firstBm25Result.score : 1;
     for (const r of bm25Results) {
-      bm25ScoreMap.set(r.index, r.score / maxBm25);
+      const chunkId = bm25ChunkIndex.get(r.index);
+      const allChunkIdx = allChunks.findIndex((c: any) => c.id === chunkId);
+      if (allChunkIdx !== -1) {
+        bm25ScoreMap.set(allChunkIdx, r.score / maxBm25);
+      }
     }
 
     const nodeMap = new Map<string, { id: string; qualifiedName: string }>();
@@ -957,5 +975,93 @@ export class Database {
       this.nodesTable = null;
       this.edgesTable = null;
     }
+  }
+
+  /**
+   * Get or build a cached BM25 index for a project.
+   * Avoids rebuilding on every search call.
+   */
+  private async getOrBuildBm25Index(
+    projectPath: string,
+    filters?: SearchOptions['filters']
+  ): Promise<{ bm25: BM25; chunkIds: string[]; chunkIndexToId: Map<number, string> }> {
+    const cacheKey = `${projectPath}:${JSON.stringify(filters ?? {})}:`;
+
+    if (this.bm25Cache.has(cacheKey)) {
+      return this.bm25Cache.get(cacheKey)!;
+    }
+
+    let query = this.chunksTable.query();
+    if (projectPath) {
+      query = query.where(`projectPath = "${projectPath}"`);
+    }
+    if (filters?.language) {
+      query = query.where(`language = "${filters.language}"`);
+    }
+    if (filters?.filePath) {
+      query = query.where(`filePath LIKE "${filters.filePath}%"`);
+    }
+
+    const allChunks = await query.select(['id', 'content']).toArray();
+    if (allChunks.length === 0) {
+      return { bm25: new BM25(), chunkIds: [], chunkIndexToId: new Map() };
+    }
+
+    const contents = allChunks.map((row: any) => row.content as string);
+    const chunkIndexToId = new Map<number, string>();
+    const chunkIds: string[] = [];
+
+    allChunks.forEach((row: any, idx: number) => {
+      chunkIndexToId.set(idx, row.id);
+      chunkIds.push(row.id);
+    });
+
+    const bm25 = new BM25();
+    bm25.index(contents);
+
+    const entry = { bm25, chunkIds, chunkIndexToId };
+    this.bm25Cache.set(cacheKey, entry);
+
+    return entry;
+  }
+
+  /**
+   * Invalidate the BM25 cache when the index changes.
+   * Call this after upsertChunks.
+   */
+  invalidateBm25Cache(): void {
+    this.bm25Cache.clear();
+  }
+
+  /**
+   * Get all chunks needed for exact search — lightweight projection.
+   * Excludes vector data to keep memory footprint low.
+   */
+  async getAllChunksForExactSearch(
+    projectPath: string,
+    filters?: SearchOptions['filters']
+  ): Promise<Array<{ id: string; content: string; filePath: string; startLine: number; endLine: number; language?: string }>> {
+    if (!this.chunksTable) throw new Error('Database not initialized');
+
+    let query = this.chunksTable.query();
+    if (projectPath) {
+      query = query.where(`projectPath = "${projectPath}"`);
+    }
+    if (filters?.language) {
+      query = query.where(`language = "${filters.language}"`);
+    }
+    if (filters?.filePath) {
+      query = query.where(`filePath LIKE "${filters.filePath}%"`);
+    }
+
+    const results = await query.select(['id', 'content', 'filePath', 'startLine', 'endLine', 'language']).toArray();
+    return results.map((row: any) => ({
+      id: row.id,
+      content: row.content,
+      filePath: row.filePath,
+      startLine: row.startLine,
+      endLine: row.endLine,
+      language: row.language,
+    }));
   }
 }

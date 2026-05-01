@@ -82,11 +82,31 @@ export class BM25 {
   }
 
   private tokenize(text: string): string[] {
+    // Preserve code-specific characters for code-aware tokenization
+    // Keep: alphanumeric, _, ., :, #, /, @, $
     return text
       .toLowerCase()
-      .replace(/[^a-z0-9\s_]/g, ' ')
+      // Replace code delimiters with spaces (split on them)
+      .replace(/([^\w_.:#\/\@\$])/g, ' $1 ')
+      // Split contractions like "don't" into ["don", "t"]
+      .replace(/(\w)'(\w)/g, '$1 $2')
       .split(/\s+/)
       .filter(t => t.length > 1)
+      .filter(t => !STOP_WORDS.has(t));
+  }
+
+  /**
+   * Code-aware tokenization: preserves structure tokens like
+   * console.log, module.name, http://, path/to, CSS class names
+   */
+  tokenizeCode(text: string): string[] {
+    return text
+      .toLowerCase()
+      // Preserve dots in property access (console.log), URLs, paths
+      // But split on most other punctuation
+      .replace(/([^\w_.\:\#\/\-\@\$])/g, ' ')
+      .split(/\s+/)
+      .filter(t => t.length > 0)
       .filter(t => !STOP_WORDS.has(t));
   }
 }

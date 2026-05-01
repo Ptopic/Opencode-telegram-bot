@@ -60,6 +60,10 @@ export interface SearchOptions {
   graphWeight?: number;
   useSummaryEmbedding?: boolean;
   summaryWeight?: number;
+  /** Weight for exact substring search pass. Default: 0 (disabled). Set > 0 to enable. */
+  exactWeight?: number;
+  /** If true, skip vector/hybrid search and use pure exact text search only. Default: false */
+  exactSearch?: boolean;
 }
 
 export interface SearchFilters {

@@ -3,6 +3,7 @@ import { ChunkManager } from './chunker/chunk-manager.js';
 import { Embedder } from './embedder/embedder.js';
 import { FileWatcher } from './watcher/file-watcher.js';
 import { ChunkSummarizer } from './summarizer/summarizer.js';
+import { exactSearch } from './search/exact-search.js';
 import type { SearchOptions, IndexOptions, ProjectStats, SearchResult, CodeChunk } from './types.js';
 import type { Node, Context } from './graph/types.js';
 import { DefaultConfig, type Config } from './config/index.js';
@@ -120,51 +121,140 @@ export class CodeSearchEngine {
     const useGraph = options?.useGraph ?? globalModeOptions.useGraph;
     const useHybrid = options?.useHybrid ?? globalModeOptions.useHybrid;
     const useSummaryEmbedding = options?.useSummaryEmbedding ?? globalModeOptions.useSummaryEmbedding;
+    const exactWeight = options?.exactWeight ?? 0.4; // default: exact search contributes 40% boost
 
-    if (!globalConfig.generateSummary) {
-      const queryEmbedding = await this.embedder.embedQuery(query);
-      return this.db.searchHybrid(query, queryEmbedding, {
-        ...options,
-        projectPath: this.currentProjectPath,
-        graphBoost: options?.graphBoost ?? globalConfig.graphWeight,
-        bm25Weight: options?.bm25Weight ?? globalConfig.bm25Weight,
-        vectorWeight: options?.vectorWeight ?? globalConfig.vectorWeight,
+    const projectPath = this.currentProjectPath;
+
+    // Pure exact search mode — skip all vector/hybrid search
+    if (options?.exactSearch) {
+      const allChunksForExact = await this.db.getAllChunksForExactSearch(projectPath, options?.filters);
+      const exactResults = exactSearch(query, allChunksForExact, {
+        threshold: 0.25,
+        limit: options?.limit ?? 10,
+        fuzzy: true,
       });
+
+      const results: SearchResult[] = exactResults
+        .filter(r => r.score >= 0.5)
+        .map(r => {
+          const chunk = allChunksForExact.find(c => c.id === r.chunkId)!;
+          return {
+            chunk: {
+              id: chunk.id,
+              filePath: chunk.filePath,
+              content: chunk.content,
+              startLine: chunk.startLine,
+              endLine: chunk.endLine,
+              language: chunk.language ?? 'unknown',
+              chunkType: 'block',
+              metadata: {},
+            },
+            score: r.score,
+            query,
+            highlights: [r.matchedText],
+          };
+        });
+
+      results.sort((a, b) => b.score - a.score);
+      return results.slice(0, options?.limit ?? 10);
     }
 
-    const graphBoost = options?.graphBoost ?? globalConfig.graphWeight;
-    const summaryWeight = options?.summaryWeight ?? globalConfig.summaryWeight;
-    const bm25Weight = options?.bm25Weight ?? globalConfig.bm25Weight;
-    const vectorWeight = options?.vectorWeight ?? globalConfig.vectorWeight;
+    // Step 1: Run exact substring/pattern search (always, it's cheap)
+    // This handles: console.log("Test"), JSX fragments, quoted strings, exact substrings
+    const allChunksForExact = await this.db.getAllChunksForExactSearch(projectPath, options?.filters);
+    const exactResults = exactWeight > 0
+      ? exactSearch(query, allChunksForExact, {
+          threshold: 0.25,
+          limit: options?.limit ?? 10,
+          fuzzy: true,
+        })
+      : [];
 
-    const resolvedOptions = {
+    const exactChunkIds = new Map<string, { score: number; matchType: string }>();
+    for (const r of exactResults) {
+      exactChunkIds.set(r.chunkId, { score: r.score, matchType: r.matchType });
+    }
+
+    // Step 2: Run the appropriate hybrid/vector search
+    let hybridResults: SearchResult[];
+
+    const searchOptions = {
       ...options,
-      projectPath: this.currentProjectPath,
+      projectPath,
+      graphBoost: options?.graphBoost ?? globalConfig.graphWeight,
+      bm25Weight: options?.bm25Weight ?? globalConfig.bm25Weight,
+      vectorWeight: options?.vectorWeight ?? globalConfig.vectorWeight,
       useGraph,
       useHybrid,
       useSummaryEmbedding,
-      graphBoost,
-      summaryWeight,
-      bm25Weight,
-      vectorWeight,
+      summaryWeight: options?.summaryWeight ?? globalConfig.summaryWeight,
     };
 
-    const queryEmbedding = await this.embedder.embedQuery(query);
-
-    if (useSummaryEmbedding && useHybrid) {
-      return this.db.searchHybridWithSummary(query, queryEmbedding, queryEmbedding, resolvedOptions);
+    if (!globalConfig.generateSummary) {
+      const queryEmbedding = await this.embedder.embedQuery(query);
+      hybridResults = await this.db.searchHybrid(query, queryEmbedding, searchOptions);
+    } else if (useSummaryEmbedding && useHybrid) {
+      const queryEmbedding = await this.embedder.embedQuery(query);
+      hybridResults = await this.db.searchHybridWithSummary(query, queryEmbedding, queryEmbedding, searchOptions);
+    } else if (useHybrid) {
+      const queryEmbedding = await this.embedder.embedQuery(query);
+      hybridResults = await this.db.searchHybrid(query, queryEmbedding, searchOptions);
+    } else if (useGraph) {
+      const queryEmbedding = await this.embedder.embedQuery(query);
+      hybridResults = await this.db.searchWithGraphBoost(queryEmbedding, searchOptions);
+    } else {
+      const queryEmbedding = await this.embedder.embedQuery(query);
+      hybridResults = await this.db.search(queryEmbedding, searchOptions);
     }
 
-    if (useHybrid) {
-      return this.db.searchHybrid(query, queryEmbedding, resolvedOptions);
+    // Step 3: Boost hybrid results with exact match scores
+    if (exactChunkIds.size > 0 && exactWeight > 0) {
+      const boosted: SearchResult[] = [];
+
+      for (const result of hybridResults) {
+        const exact = exactChunkIds.get(result.chunk.id);
+        if (exact) {
+          // Exact match boosts the score significantly
+          const boostedScore = result.score + (exact.score * exactWeight);
+          boosted.push({ ...result, score: Math.min(1, boostedScore) });
+        } else {
+          boosted.push(result);
+        }
+      }
+
+      // Step 4: If we have strong exact matches not in hybrid results, prepend them
+      const hybridChunkIds = new Set(hybridResults.map(r => r.chunk.id));
+      const missingExactMatches = exactResults.filter(
+        r => !hybridChunkIds.has(r.chunkId) && r.score >= 0.5
+      );
+
+      for (const em of missingExactMatches) {
+        // Find the full chunk data
+        const chunk = allChunksForExact.find(c => c.id === em.chunkId);
+        if (chunk) {
+          boosted.push({
+            chunk: {
+              id: chunk.id,
+              filePath: chunk.filePath,
+              content: chunk.content,
+              startLine: chunk.startLine,
+              endLine: chunk.endLine,
+              language: chunk.language ?? 'unknown',
+              chunkType: 'block',
+              metadata: {},
+            },
+            score: em.score * exactWeight,
+            query,
+            highlights: [em.matchedText],
+          });
+        }
+      }
+
+      boosted.sort((a, b) => b.score - a.score);
+      return boosted.slice(0, options?.limit ?? 10);
     }
 
-    if (useGraph) {
-      return this.db.searchWithGraphBoost(queryEmbedding, resolvedOptions);
-    }
-
-    const results = await this.db.search(queryEmbedding, resolvedOptions);
-    return results;
+    return hybridResults.slice(0, options?.limit ?? 10);
   }
 
   async searchWithGraph(query: string, options?: Partial<SearchOptions & { graphBoost?: number }>): Promise<SearchResult[]> {
