@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const SOURCE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../../../--help/.opencode");
+const CONFIG_JS_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../../../--help/config.mjs");
 
 function isPlainObject(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -23,7 +24,121 @@ function mergeConfig(target, source) {
   return merged;
 }
 
-export function promptCommand(targetPath) {
+function stripJsoncComments(text) {
+  let result = "";
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '"') {
+      let j = i + 1;
+      while (j < text.length && text[j] !== '"') {
+        if (text[j] === "\\") j++;
+        j++;
+      }
+      result += text.slice(i, j + 1);
+      i = j + 1;
+    } else if (text[i] === "/" && text[i + 1] === "/") {
+      let j = i + 2;
+      while (j < text.length && text[j] !== "\n") j++;
+      i = j;
+    } else if (text[i] === "/" && text[i + 1] === "*") {
+      let j = i + 2;
+      while (j < text.length && !(text[j] === "*" && text[j + 1] === "/")) j++;
+      i = j + 2;
+    } else {
+      result += text[i];
+      i++;
+    }
+  }
+  return result;
+}
+
+function parseJsonc(text) {
+  const stripped = stripJsoncComments(text);
+  const noTrailing = stripped.replace(/,\s*([\]}])/g, "$1");
+  return JSON.parse(noTrailing);
+}
+
+async function loadConfig() {
+  const configUrl = "file://" + CONFIG_JS_PATH.replace(/\\/g, "/");
+  const mod = await import(configUrl);
+  return {
+    deniedTools: mod.deniedTools || [],
+    askTools: mod.askTools || [],
+    agentSkills: mod.agentSkills || {},
+    agentPrompts: mod.agentPrompts || {},
+    models: mod.models || {},
+    smartAgents: mod.smartAgents || [],
+    normalAgents: mod.normalAgents || [],
+    smartCategories: mod.smartCategories || [],
+    normalCategories: mod.normalCategories || [],
+  };
+}
+
+function applyConfigToJsonc(data, config) {
+  const deniedToolEntries = Object.fromEntries(
+    config.deniedTools.map((tool) => [tool, false])
+  );
+  const deniedPermEntries = Object.fromEntries(
+    config.deniedTools.map((tool) => [tool, "deny"])
+  );
+  const askPermEntries = Object.fromEntries(
+    config.askTools.map((tool) => [tool, "ask"])
+  );
+
+  // Top-level: deny listed tools, ask for restricted tools
+  data.tools = { ...data.tools, ...deniedToolEntries };
+  data.permission = {
+    ...data.permission,
+    ...deniedPermEntries,
+    ...askPermEntries,
+  };
+
+  if (data.agents) {
+    for (const [agentName, agentConfig] of Object.entries(data.agents)) {
+      // Deny listed tools, ask for restricted tools — everything else allowed
+      agentConfig.tools = {
+        ...agentConfig.tools,
+        ...deniedToolEntries,
+      };
+
+      agentConfig.permission = {
+        ...agentConfig.permission,
+        ...deniedPermEntries,
+        ...askPermEntries,
+      };
+
+      if (config.agentPrompts[agentName]) {
+        agentConfig.prompt_append = config.agentPrompts[agentName];
+      }
+
+      if (agentName in config.agentSkills) {
+        agentConfig.skills = config.agentSkills[agentName];
+      } else if ("skills" in agentConfig) {
+        delete agentConfig.skills;
+      }
+
+      if (config.smartAgents.includes(agentName)) {
+        agentConfig.model = config.models.smart;
+      } else if (config.normalAgents.includes(agentName)) {
+        agentConfig.model = config.models.normal;
+      }
+    }
+  }
+
+  if (data.categories) {
+    for (const [catName, catConfig] of Object.entries(data.categories)) {
+      if (config.smartCategories.includes(catName)) {
+        catConfig.model = config.models.smart;
+      } else if (config.normalCategories.includes(catName)) {
+        catConfig.model = config.models.normal;
+      }
+    }
+  }
+
+  return data;
+}
+
+export async function promptCommand(targetPath) {
   const projectPath = targetPath || process.cwd();
   console.log(`Setting up OpenCode prompt config for: ${projectPath}`);
   const opencodeDir = path.join(projectPath, ".opencode");
@@ -39,6 +154,22 @@ export function promptCommand(targetPath) {
     writeFileSync(opencodeJsonPath, JSON.stringify(nextConfig, null, 2));
     console.log(`${existingConfig ? "Updated" : "Created"}: ${opencodeJsonPath}`);
     console.log(`${existingConfig ? "Updated" : "Created"}: ${opencodeDir}/ (full directory)`);
+
+    // ── Merge config.mjs into oh-my-openagent.jsonc ──────────────────────
+    const agentJsoncPath = path.join(opencodeDir, "oh-my-openagent.jsonc");
+    if (existsSync(agentJsoncPath)) {
+      const config = await loadConfig();
+      const raw = readFileSync(agentJsoncPath, "utf8");
+      const data = parseJsonc(raw);
+      applyConfigToJsonc(data, config);
+      writeFileSync(agentJsoncPath, JSON.stringify(data, null, 2));
+      console.log(`Merged config.mjs → ${agentJsoncPath}`);
+      console.log(`  models:       smart=${config.models.smart}, normal=${config.models.normal}`);
+      console.log(`  deniedTools:  [${config.deniedTools.join(", ")}]`);
+      console.log(`  askTools:     [${config.askTools.join(", ")}]`);
+      console.log(`  agentSkills:  ${Object.entries(config.agentSkills).map(([k, v]) => `${k}: [${v.join(", ")}]`).join(", ")}`);
+      console.log(`  agentPrompts: [${Object.keys(config.agentPrompts).join(", ")}]`);
+    }
 
     console.log("\nDone! The project .opencode config has been updated.");
     console.log("\nTo use:");

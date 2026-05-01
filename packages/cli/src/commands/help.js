@@ -58,6 +58,11 @@ COMMANDS
     watch <path>        Stream session messages (Ctrl+C to stop)
     kill-all            Stop all OpenCode server instances
 
+  Prompt Setup
+    prompt [path]                        Set up .opencode config for a project (defaults to cwd)
+                                         Merges --help/config.mjs (disabledTools, allowedTools,
+                                         permissions, agentPrompts) into oh-my-openagent.jsonc
+
   Utility
     config get                           Show server config
     config tool-call-display <on|off>    Toggle tool call messages in /watch SSE streams

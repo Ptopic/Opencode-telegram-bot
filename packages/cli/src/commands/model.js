@@ -1,15 +1,3 @@
-/**
- * model set smarter|normal [model-id]
- *
- * Switch the "smart" (GLM 5.1) or "normal" (MiniMax M2.7) model in
- * --help/.opencode/oh-my-openagent.jsonc. After changing, run
- * `opencode-telegram prompts <project>` to apply the config to a project.
- *
- * - `model set smarter`  — list favorite models, pick one, update SMART agents/categories
- * - `model set normal`   — list favorite models, pick one, update NORMAL agents/categories
- * - `model set smarter <model-id>` — skip interactive picker, set directly
- * - `model list`         — show current smart & normal model assignments
- */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
@@ -17,13 +5,7 @@ import path from "node:path";
 
 const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(__filename, "../../../../..");
-const HELP_OPENAGENT_PATH = path.join(REPO_ROOT, "--help/.opencode/oh-my-openagent.jsonc");
-
-const SMART_AGENTS = ["sisyphus", "oracle", "metis", "momus", "prometheus", "hephaestus"];
-const NORMAL_AGENTS = ["ultrawork", "explore", "general", "librarian", "atlas", "sisyphus-junior", "multimodal-looker"];
-
-const SMART_CATEGORIES = ["visual-engineering", "ultrabrain", "deep", "artistry", "unspecified-high"];
-const NORMAL_CATEGORIES = ["quick", "unspecified-low", "writing"];
+const CONFIG_MJS_PATH = path.join(REPO_ROOT, "--help/config.mjs");
 
 const FAVORITE_MODELS = [
   { id: "synthetic/hf:zai-org/GLM-5.1",             label: "GLM 5.1",               tier: "smart" },
@@ -38,119 +20,36 @@ const FAVORITE_MODELS = [
   { id: "synthetic/hf:zai-org/GLM-4.7-Flash",       label: "GLM 4.7 Flash",          tier: "normal" },
 ];
 
-function stripJsoncComments(text) {
-  let result = "";
-  let inString = false;
-  let stringChar = "";
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
-
-    if (inString) {
-      result += ch;
-      if (ch === stringChar && text[i - 1] !== "\\") {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (ch === '"' || ch === "'") {
-      inString = true;
-      stringChar = ch;
-      result += ch;
-      continue;
-    }
-
-    if (ch === "/" && next === "/") {
-      while (i < text.length && text[i] !== "\n") i++;
-      if (i < text.length) result += text[i];
-      continue;
-    }
-
-    result += ch;
-  }
-  return result;
+async function loadConfigMjs() {
+  const configUrl = "file://" + CONFIG_MJS_PATH.replace(/\\/g, "/");
+  const mod = await import(configUrl);
+  return {
+    models: mod.models || {},
+    smartAgents: mod.smartAgents || [],
+    normalAgents: mod.normalAgents || [],
+    smartCategories: mod.smartCategories || [],
+    normalCategories: mod.normalCategories || [],
+  };
 }
 
-function stripTrailingCommas(text) {
-  let result = "";
-  let inString = false;
-  let stringChar = "";
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (inString) {
-      result += ch;
-      if (ch === stringChar && text[i - 1] !== "\\") {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'") {
-      inString = true;
-      stringChar = ch;
-      result += ch;
-      continue;
-    }
-    result += ch;
-  }
-  return result.replace(/,\s*([\]}])/g, "$1");
-}
+function writeModelToConfig(tier, modelId) {
+  const raw = readFileSync(CONFIG_MJS_PATH, "utf8");
 
-function parseJsonc(filePath) {
-  const raw = readFileSync(filePath, "utf8");
-  const stripped = stripJsoncComments(raw);
-  const noTrailing = stripTrailingCommas(stripped);
-  return JSON.parse(noTrailing);
-}
-
-function readOpenagentConfig() {
-  if (!existsSync(HELP_OPENAGENT_PATH)) {
-    console.error(`Config not found: ${HELP_OPENAGENT_PATH}`);
+  // Find the current models export to preserve the other tier's value
+  const modelsRegex = /export\s+const\s+models\s*=\s*\{([\s\S]*?)\}/;
+  const match = raw.match(modelsRegex);
+  if (!match) {
+    console.error("Could not find `export const models = {...}` in config.mjs");
     process.exit(1);
   }
-  return parseJsonc(HELP_OPENAGENT_PATH);
-}
 
-function writeOpenagentConfig(config) {
-  const raw = readFileSync(HELP_OPENAGENT_PATH, "utf8");
-  const updated = applyModelChangesToRaw(raw, config);
-  writeFileSync(HELP_OPENAGENT_PATH, updated);
-}
+  const otherKey = tier === "smart" ? "normal" : "smart";
+  const otherMatch = match[1].match(new RegExp(`${otherKey}:\\s*"([^"]*?)"`));
+  const otherValue = otherMatch ? otherMatch[1] : "";
 
-/**
- * Given the raw JSONC text and a parsed+modified config, apply model changes
- * by doing targeted string replacements for each model field.
- */
-function applyModelChangesToRaw(rawText, newConfig) {
-  let result = rawText;
-
-  for (const [agentName, agentConfig] of Object.entries(newConfig.agents || {})) {
-    if (agentConfig?.model) {
-      const agentPattern = new RegExp(
-        `("${agentName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\s*:\\s*\\{[^}]*?"model"\\s*:\\s*")([^"]*?)(")`,
-        "s"
-      );
-      const match = result.match(agentPattern);
-      if (match) {
-        result = result.replace(match[0], match[1] + agentConfig.model + match[3]);
-      }
-    }
-  }
-
-  for (const [catName, catConfig] of Object.entries(newConfig.categories || {})) {
-    if (catConfig?.model) {
-      const catPattern = new RegExp(
-        `("${catName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\s*:\\s*\\{[^}]*?"model"\\s*:\\s*")([^"]*?)(")`,
-        "s"
-      );
-      const match = result.match(catPattern);
-      if (match) {
-        result = result.replace(match[0], match[1] + catConfig.model + match[3]);
-      }
-    }
-  }
-
-  return result;
+  const newBlock = `export const models = {\n  smart: "${tier === "smart" ? modelId : otherValue}",\n  normal: "${tier === "normal" ? modelId : otherValue}",\n}`;
+  const updated = raw.replace(match[0], newBlock);
+  writeFileSync(CONFIG_MJS_PATH, updated);
 }
 
 async function pickModel(tier) {
@@ -189,89 +88,46 @@ async function pickModel(tier) {
 export async function modelSetSmarterCommand(modelId) {
   const newModel = modelId || (await pickModel("smart"));
 
-  const config = readOpenagentConfig();
+  writeModelToConfig("smart", newModel);
 
-  for (const agentName of SMART_AGENTS) {
-    if (config.agents?.[agentName]) {
-      config.agents[agentName].model = newModel;
-    }
-  }
-
-  for (const catName of SMART_CATEGORIES) {
-    if (config.categories?.[catName]) {
-      config.categories[catName].model = newModel;
-    }
-  }
-
-  writeOpenagentConfig(config);
+  const config = await loadConfigMjs();
 
   console.log(`\n  SMART model set to: ${newModel}`);
-  console.log(`\n  Updated agents:    ${SMART_AGENTS.join(", ")}`);
-  console.log(`  Updated categories: ${SMART_CATEGORIES.join(", ")}`);
-  console.log(`\n  Config: ${HELP_OPENAGENT_PATH}`);
-  console.log(`\n  Apply to project:  opencode-telegram prompts <project-path>`);
+  console.log(`\n  Agents:    ${config.smartAgents.join(", ")}`);
+  console.log(`  Categories: ${config.smartCategories.join(", ")}`);
+  console.log(`\n  Config: ${CONFIG_MJS_PATH}`);
+  console.log(`\n  Apply to project:  opencode-telegram prompt <project-path>`);
 }
 
 export async function modelSetNormalCommand(modelId) {
   const newModel = modelId || (await pickModel("normal"));
 
-  const config = readOpenagentConfig();
+  writeModelToConfig("normal", newModel);
 
-  for (const agentName of NORMAL_AGENTS) {
-    if (config.agents?.[agentName]) {
-      config.agents[agentName].model = newModel;
-    }
-  }
-
-  for (const catName of NORMAL_CATEGORIES) {
-    if (config.categories?.[catName]) {
-      config.categories[catName].model = newModel;
-    }
-  }
-
-  writeOpenagentConfig(config);
+  const config = await loadConfigMjs();
 
   console.log(`\n  NORMAL model set to: ${newModel}`);
-  console.log(`\n  Updated agents:    ${NORMAL_AGENTS.join(", ")}`);
-  console.log(`  Updated categories: ${NORMAL_CATEGORIES.join(", ")}`);
-  console.log(`\n  Config: ${HELP_OPENAGENT_PATH}`);
-  console.log(`\n  Apply to project:  opencode-telegram prompts <project-path>`);
+  console.log(`\n  Agents:    ${config.normalAgents.join(", ")}`);
+  console.log(`  Categories: ${config.normalCategories.join(", ")}`);
+  console.log(`\n  Config: ${CONFIG_MJS_PATH}`);
+  console.log(`\n  Apply to project:  opencode-telegram prompt <project-path>`);
 }
 
 export async function modelListCommand() {
-  const config = readOpenagentConfig();
+  const config = await loadConfigMjs();
 
   console.log("\n  Current model assignments:\n");
 
-  const smartModel = config.agents?.sisyphus?.model || "(not set)";
-  const normalModel = config.agents?.explore?.model || "(not set)";
+  console.log(`  SMART  model: ${config.models.smart || "(not set)"}`);
+  console.log(`    Agents:    ${config.smartAgents.join(", ")}`);
+  console.log(`    Categories: ${config.smartCategories.join(", ")}`);
 
-  console.log(`  SMART  model: ${smartModel}`);
-  console.log(`    Agents:    ${SMART_AGENTS.join(", ")}`);
-  console.log(`    Categories: ${SMART_CATEGORIES.join(", ")}`);
+  console.log(`\n  NORMAL model: ${config.models.normal || "(not set)"}`);
+  console.log(`    Agents:    ${config.normalAgents.join(", ")}`);
+  console.log(`    Categories: ${config.normalCategories.join(", ")}`);
 
-  console.log(`\n  NORMAL model: ${normalModel}`);
-  console.log(`    Agents:    ${NORMAL_AGENTS.join(", ")}`);
-  console.log(`    Categories: ${NORMAL_CATEGORIES.join(", ")}`);
-
-  console.log("\n  Per-agent overrides:");
-  for (const [name, cfg] of Object.entries(config.agents || {})) {
-    if (cfg?.model) {
-      const tier = SMART_AGENTS.includes(name) ? "SMART" : NORMAL_AGENTS.includes(name) ? "NORMAL" : "?";
-      console.log(`    ${tier.padEnd(6)} ${name.padEnd(20)} ${cfg.model}`);
-    }
-  }
-
-  console.log("\n  Per-category overrides:");
-  for (const [name, cfg] of Object.entries(config.categories || {})) {
-    if (cfg?.model) {
-      const tier = SMART_CATEGORIES.includes(name) ? "SMART" : NORMAL_CATEGORIES.includes(name) ? "NORMAL" : "?";
-      console.log(`    ${tier.padEnd(6)} ${name.padEnd(20)} ${cfg.model}`);
-    }
-  }
-
-  console.log(`\n  Config: ${HELP_OPENAGENT_PATH}`);
-  console.log(`  Apply:  opencode-telegram prompts <project-path>\n`);
+  console.log(`\n  Config: ${CONFIG_MJS_PATH}`);
+  console.log(`  Apply:  opencode-telegram prompt <project-path>\n`);
 }
 
 export async function modelCommand(sub, modelId) {
