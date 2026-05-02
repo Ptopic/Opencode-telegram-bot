@@ -14,9 +14,23 @@
 // `model set smarter/normal` writes here; `prompt <path>` applies to agents/categories.
 //
 export const models = {
-  smart: "openai/gpt-5.4",
+  smart: "synthetic/hf:moonshotai/Kimi-K2.6",
   normal: "minimax-coding-plan/MiniMax-M2.7-highspeed",
 };
+
+export const favoriteModels = [
+  { id: "synthetic/hf:zai-org/GLM-5.1",             label: "GLM 5.1",                tier: "smart" },
+  { id: "synthetic/hf:moonshotai/Kimi-K2.6",        label: "Kimi K2.6",              tier: "smart" },
+  { id: "openai/gpt-5.5",                            label: "GPT-5.5",                tier: "smart" },
+  { id: "openai/gpt-5.4",                            label: "GPT-5.4",                tier: "smart" },
+  { id: "synthetic/hf:zai-org/GLM-5",               label: "GLM 5",                  tier: "smart" },
+  { id: "openai/gpt-5.3-codex",                      label: "GPT-5.3 Codex",         tier: "smart" },
+  { id: "synthetic/hf:zai-org/GLM-4.7",             label: "GLM 4.7",                tier: "smart" },
+  { id: "minimax-coding-plan/MiniMax-M2.7-highspeed", label: "MiniMax M2.7 Highspeed", tier: "normal" },
+  { id: "openai/gpt-5.4-fast",                       label: "GPT-5.4 Fast",           tier: "normal" },
+  { id: "openai/gpt-5.3-codex-spark",                label: "GPT-5.3 Codex Spark",   tier: "normal" },
+  { id: "synthetic/hf:zai-org/GLM-4.7-Flash",       label: "GLM 4.7 Flash",          tier: "normal" },
+];
 
 export const smartAgents = [
   "sisyphus",
@@ -46,11 +60,7 @@ export const smartCategories = [
   "unspecified-high",
 ];
 
-export const normalCategories = [
-  "quick",
-  "unspecified-low",
-  "writing",
-];
+export const normalCategories = ["quick", "unspecified-low", "writing"];
 
 // ─── Tool Policy ────────────────────────────────────────────────────────────────
 //
@@ -78,7 +88,7 @@ export const askTools = [];
 
 export const bashRules = {
   "*": "ask",
-  "bx": "allow",
+  bx: "allow",
   "bx *": "allow",
 };
 

@@ -1,9 +1,17 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "permission": {
-    "bash": "ask",
-    "grep": "deny",
-    "rg": "deny"
+    "ast_grep_search": "deny",
+    "ast_grep_replace": "deny",
+    "MiniMax_web_search": "deny",
+    "webfetch": "deny",
+    "web-search-prime_web_search_prime": "deny",
+    "websearch_web_search_exa": "deny",
+    "bash": {
+      "*": "ask",
+      "bx": "allow",
+      "bx *": "allow"
+    }
   },
   "mcp": {
     "code-search": {
@@ -16,6 +24,18 @@
         "CODE_SEARCH_API_URL": "http://localhost:4098"
       },
       "enabled": true
+    }
+  },
+  "provider": {
+    "synthetic": {
+      "models": {
+        "hf:zai-org/GLM-5.1": {
+          "name": "GLM-5.1"
+        },
+        "hf:moonshotai/Kimi-K2.6": {
+          "name": "Kimi-K2.6"
+        }
+      }
     }
   }
 }

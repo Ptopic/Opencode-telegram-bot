@@ -19,6 +19,9 @@
       "models": {
         "hf:zai-org/GLM-5.1": {
           "name": "GLM-5.1"
+        },
+        "hf:moonshotai/Kimi-K2.6": {
+          "name": "Kimi-K2.6"
         }
       }
     }

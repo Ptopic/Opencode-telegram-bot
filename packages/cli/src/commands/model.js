@@ -7,18 +7,13 @@ const __filename = fileURLToPath(import.meta.url);
 const REPO_ROOT = path.resolve(__filename, "../../../../..");
 const CONFIG_MJS_PATH = path.join(REPO_ROOT, "--help/config.mjs");
 
-const FAVORITE_MODELS = [
-  { id: "synthetic/hf:zai-org/GLM-5.1",             label: "GLM 5.1",               tier: "smart" },
-  { id: "openai/gpt-5.5",                            label: "GPT-5.5",                tier: "smart" },
-  { id: "openai/gpt-5.4",                            label: "GPT-5.4",                tier: "smart" },
-  { id: "synthetic/hf:zai-org/GLM-5",               label: "GLM 5",                  tier: "smart" },
-  { id: "openai/gpt-5.3-codex",                      label: "GPT-5.3 Codex",         tier: "smart" },
-  { id: "synthetic/hf:zai-org/GLM-4.7",             label: "GLM 4.7",                tier: "smart" },
-  { id: "minimax-coding-plan/MiniMax-M2.7-highspeed", label: "MiniMax M2.7 Highspeed", tier: "normal" },
-  { id: "openai/gpt-5.4-fast",                       label: "GPT-5.4 Fast",           tier: "normal" },
-  { id: "openai/gpt-5.3-codex-spark",                label: "GPT-5.3 Codex Spark",   tier: "normal" },
-  { id: "synthetic/hf:zai-org/GLM-4.7-Flash",       label: "GLM 4.7 Flash",          tier: "normal" },
-];
+let FAVORITE_MODELS = [];
+
+async function loadFavoriteModels() {
+  const configUrl = "file://" + CONFIG_MJS_PATH.replace(/\\/g, "/");
+  const mod = await import(configUrl);
+  FAVORITE_MODELS = mod.favoriteModels || [];
+}
 
 async function loadConfigMjs() {
   const configUrl = "file://" + CONFIG_MJS_PATH.replace(/\\/g, "/");
@@ -86,6 +81,7 @@ async function pickModel(tier) {
 }
 
 export async function modelSetSmarterCommand(modelId) {
+  if (!FAVORITE_MODELS.length) await loadFavoriteModels();
   const newModel = modelId || (await pickModel("smart"));
 
   writeModelToConfig("smart", newModel);
@@ -100,6 +96,7 @@ export async function modelSetSmarterCommand(modelId) {
 }
 
 export async function modelSetNormalCommand(modelId) {
+  if (!FAVORITE_MODELS.length) await loadFavoriteModels();
   const newModel = modelId || (await pickModel("normal"));
 
   writeModelToConfig("normal", newModel);
