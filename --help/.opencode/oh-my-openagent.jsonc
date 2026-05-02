@@ -32,7 +32,9 @@
     "momus": {},
     "hephaestus": {},
     "multimodal-looker": {},
-    "reviewer": {},
+    "reviewer": {
+      "description": "Senior code reviewer — performs thorough, structured reviews across correctness, security, performance, maintainability, and style."
+    },
   },
 
   "categories": {
