@@ -25,6 +25,7 @@ export const smartAgents = [
   "momus",
   "prometheus",
   "hephaestus",
+  "reviewer",
 ];
 
 export const normalAgents = [
@@ -35,7 +36,6 @@ export const normalAgents = [
   "atlas",
   "sisyphus-junior",
   "multimodal-looker",
-  "reviewer",
 ];
 
 export const smartCategories = [
