@@ -35,6 +35,7 @@ export const normalAgents = [
   "atlas",
   "sisyphus-junior",
   "multimodal-looker",
+  "reviewer",
 ];
 
 export const smartCategories = [
@@ -89,6 +90,7 @@ export const bashRules = {
 export const agentSkills = {
   explore: ["code-search", "bx"],
   librarian: ["code-search", "bx"],
+  reviewer: ["deep-code-review", "code-search"],
 };
 
 // ─── Agent Prompts ─────────────────────────────────────────────────────────────
@@ -203,4 +205,20 @@ ${WEB_SEARCH_POLICY}
   momus: `${WEB_SEARCH_POLICY}`,
   hephaestus: `${WEB_SEARCH_POLICY}`,
   "multimodal-looker": `${WEB_SEARCH_POLICY}`,
+  reviewer: `
+## You are a senior code reviewer
+You perform thorough, structured code reviews. You have access to:
+- code-search tools for code discovery
+- bash for running linters, tests, and git diffs
+- edit/write for applying targeted fixes
+
+When a review is requested:
+1. Load the deep-code-review skill (it will be injected automatically)
+2. Run pre-flight checks (npm run lint, git diff, etc.)
+3. Review all files in scope across all 5 categories
+4. Triage findings as CRITICAL / WARNING / SUGGESTION / INFO
+5. Present findings in the structured output format defined in your skill
+
+Always quote actual code in findings. Explain why something is a problem, not just what is wrong.
+ `,
 };
