@@ -1202,6 +1202,56 @@ async function handleRequest(req, res) {
       }
     }
 
+    // ── POST /index ────────────────────────────────────────────────────────
+    // Trigger code-search indexing for a project path and return stats summary.
+    if (pathname === "/index" && method === "POST") {
+      const body = await parseBody(req);
+      const projectPath = body.project ?? body.projectPath ?? "";
+      if (!projectPath) {
+        return errorResponse(res, 400, "Missing 'project' in request body");
+      }
+      try {
+        const csRes = await fetch("http://localhost:4098/api/search/index", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paths: [projectPath] }),
+          signal: AbortSignal.timeout(300_000),
+        });
+        const data = await csRes.json();
+        const stats = data.stats ?? {};
+        return jsonResponse(res, csRes.status, {
+          ok: true,
+          projectPath,
+          stats: {
+            totalFiles: stats.totalFiles ?? 0,
+            totalChunks: stats.totalChunks ?? 0,
+            totalLines: stats.totalLines ?? 0,
+            languages: stats.languages ?? {},
+          },
+        });
+      } catch (err) {
+        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+      }
+    }
+
+    // ── GET /index ─────────────────────────────────────────────────────────
+    // Return code-search index stats for a project path (without re-indexing).
+    if (pathname === "/index" && method === "GET") {
+      const projectPath = url.searchParams.get("project") ?? url.searchParams.get("projectPath") ?? "";
+      if (!projectPath) {
+        return errorResponse(res, 400, "Missing 'project' query parameter");
+      }
+      try {
+        const csRes = await fetch(
+          `http://localhost:4098/api/search/stats?projectPath=${encodeURIComponent(projectPath)}`,
+        );
+        const data = await csRes.json();
+        return jsonResponse(res, csRes.status, data);
+      } catch (err) {
+        return errorResponse(res, 502, `Code-search server unreachable: ${err.message}`);
+      }
+    }
+
     // ── Code Search Proxy Routes ────────────────────────────────────────────
     // Proxy /api/search/* → code-search server at localhost:4098
 
