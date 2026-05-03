@@ -47,7 +47,7 @@ export class ChunkManager {
     const { readdirSync, statSync } = await import('fs');
     const { join, extname } = await import('path');
     const allChunks: CodeChunk[] = [];
-    const extensions = new Set(['.ts', '.js', '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.json']);
+    const extensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp', '.json']);
     const indexedHashes = options?.indexedFileHashes ?? new Map();
 
     const ignoreManager = await IgnoreManager.fromDirectory(this.currentProjectPath);

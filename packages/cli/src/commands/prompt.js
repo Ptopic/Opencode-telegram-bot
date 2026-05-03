@@ -66,6 +66,7 @@ async function loadConfig() {
     bashRules: mod.bashRules || {},
     agentSkills: mod.agentSkills || {},
     agentPrompts: mod.agentPrompts || {},
+    agentTools: mod.agentTools || {},
     models: mod.models || {},
     smartAgents: mod.smartAgents || [],
     normalAgents: mod.normalAgents || [],
@@ -93,6 +94,7 @@ function applyConfigToJsonc(data, config) {
     for (const [agentName, agentConfig] of Object.entries(data.agents)) {
       agentConfig.tools = {
         ...agentConfig.tools,
+        ...config.agentTools,
         ...deniedToolEntries,
       };
 
@@ -169,6 +171,7 @@ export async function promptCommand(targetPath) {
       console.log(`  bashRules:    ${JSON.stringify(config.bashRules)}`);
       console.log(`  agentSkills:  ${Object.entries(config.agentSkills).map(([k, v]) => `${k}: [${v.join(", ")}]`).join(", ")}`);
       console.log(`  agentPrompts: [${Object.keys(config.agentPrompts).join(", ")}]`);
+      console.log(`  agentTools:   ${JSON.stringify(config.agentTools)}`);
     }
 
     console.log("\nDone! The project .opencode config has been updated.");

@@ -1,6 +1,7 @@
 import axios from "axios";
 import fs from "node:fs";
 import path from "node:path";
+import ignore from "ignore";
 
 const CODE_SEARCH_PORT = 4098;
 const BASE_URL = `http://localhost:${CODE_SEARCH_PORT}`;
@@ -20,33 +21,88 @@ const IGNORE_DIRS = new Set([
   ".env",
   "venv",
   ".venv",
+  ".turbo",
+  ".vercel",
+  ".netlify",
+  ".serverless",
 ]);
 
 const CODE_EXTENSIONS = new Set([
-  ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".json"
+  ".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".hpp", ".json"
 ]);
 
-function isIgnored(dirPath, entryName) {
+function createIgnoreManager(dirPath) {
+  const ig = ignore();
+  const defaultPatterns = [
+    'node_modules',
+    '.git',
+    'dist',
+    'build',
+    '.next',
+    '.nuxt',
+    '.cache',
+    '__pycache__',
+    '*.pyc',
+    '.DS_Store',
+    'Thumbs.db',
+    '.env.local',
+    '.env.*.local',
+    '*.log',
+    'pnpm-lock.yaml',
+    'package-lock.json',
+    'yarn.lock',
+    'coverage',
+    '.nyc_output',
+    '.pytest_cache',
+    '.env',
+    'venv',
+    '.venv',
+    '.turbo',
+    '.vercel',
+    '.netlify',
+    '.serverless',
+    '*.min.js',
+    '*.min.css',
+    '*.map',
+  ];
+  ig.add(defaultPatterns);
+
+  const gitignorePath = path.join(dirPath, '.gitignore');
+  if (fs.existsSync(gitignorePath)) {
+    try {
+      const content = fs.readFileSync(gitignorePath, 'utf-8');
+      const patterns = content.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
+      ig.add(patterns);
+    } catch {}
+  }
+
+  return ig;
+}
+
+function isIgnored(dirPath, entryName, ig) {
   if (IGNORE_DIRS.has(entryName)) return true;
-  if (entryName.startsWith(".")) return true;
-  if (entryName.endsWith(".pyc")) return true;
-  if (entryName === "package-lock.json" || entryName === "pnpm-lock.yaml" || entryName === "yarn.lock") return true;
-  if (entryName === ".DS_Store" || entryName === "Thumbs.db") return true;
+  if (entryName === '.DS_Store' || entryName === 'Thumbs.db') return true;
+  if (entryName.endsWith('.pyc')) return true;
+  if (entryName === 'package-lock.json' || entryName === 'pnpm-lock.yaml' || entryName === 'yarn.lock') return true;
+
+  const relPath = path.relative(path.dirname(dirPath), path.join(dirPath, entryName));
+  if (ig.ignores(relPath)) return true;
+
   return false;
 }
 
-function countFiles(dirPath) {
+function countFiles(dirPath, ig) {
   let fileCount = 0;
   let dirCount = 0;
 
   try {
     const entries = fs.readdirSync(dirPath, { withFileTypes: true });
     for (const entry of entries) {
-      if (isIgnored(dirPath, entry.name)) continue;
+      if (isIgnored(dirPath, entry.name, ig)) continue;
 
       if (entry.isDirectory()) {
         dirCount++;
-        const { files, dirs } = countFiles(path.join(dirPath, entry.name));
+        const { files, dirs } = countFiles(path.join(dirPath, entry.name), ig);
         fileCount += files;
         dirCount += dirs;
       } else if (entry.isFile()) {
@@ -123,7 +179,8 @@ export async function codeIndexCommand(projectPath, options = {}) {
   }
 
   console.log(`Scanning: ${normalizedPath}`);
-  const { files, dirs } = countFiles(normalizedPath);
+  const ig = createIgnoreManager(normalizedPath);
+  const { files, dirs } = countFiles(normalizedPath, ig);
   console.log(`Found ${files.toLocaleString()} files in ${dirs.toLocaleString()} directories\n`);
 
   console.log(`Indexing: ${normalizedPath}`);

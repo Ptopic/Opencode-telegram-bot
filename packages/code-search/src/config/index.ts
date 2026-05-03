@@ -37,7 +37,7 @@ export const IndexOptionsSchema = z.object({
   paths: z.array(z.string()).min(1),
   extensions: z.record(z.string()).optional(),
   maxFileSize: z.number().positive().default(1024 * 1024),
-  ignorePatterns: z.array(z.string()).default(['node_modules', '.git', 'dist', 'build']),
+  ignorePatterns: z.array(z.string()).default(['node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.cache', '__pycache__', '*.pyc', '.DS_Store', 'coverage', '.nyc_output', '.pytest_cache', '.env', 'venv', '.venv', '.turbo', '.vercel', '.netlify', '.serverless', '*.min.js', '*.min.css', '*.map']),
 });
 
 export const ChunkingOptionsSchema = z.object({
@@ -99,7 +99,7 @@ export const DefaultConfig: Config = {
       '.json': 'json',
     },
     maxFileSize: 1024 * 1024,
-    ignorePatterns: ['node_modules', '.git', 'dist', 'build', '.next', '.nuxt'],
+    ignorePatterns: ['node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.cache', '__pycache__', '*.pyc', '.DS_Store', 'coverage', '.nyc_output', '.pytest_cache', '.env', 'venv', '.venv', '.turbo', '.vercel', '.netlify', '.serverless', '*.min.js', '*.min.css', '*.map'],
   },
   search: {
     limit: 10,
@@ -128,8 +128,8 @@ export const DefaultConfig: Config = {
   },
   watcher: {
     paths: [],
-    extensions: ['.ts', '.js', '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.json'],
+    extensions: ['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp', '.json'],
     debounceMs: 500,
-    ignorePatterns: ['node_modules', '.git', 'dist', 'build'],
+    ignorePatterns: ['node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.cache', '__pycache__', '*.pyc', '.DS_Store', 'coverage', '.nyc_output', '.pytest_cache', '.env', 'venv', '.venv', '.turbo', '.vercel', '.netlify', '.serverless', '*.min.js', '*.min.css', '*.map'],
   },
 };

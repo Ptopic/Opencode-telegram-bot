@@ -86,6 +86,16 @@ export const deniedTools = [
 
 export const askTools = [];
 
+// ─── Agent Tool Enablements ─────────────────────────────────────────────────────
+//
+// Explicitly enable tools at the per-agent level as an extra safety net
+// (skills already enable them via wildcards, but this ensures compatibility
+// with clients that inspect agent.tools directly).
+//
+export const agentTools = {
+  "code-search_*": true,
+};
+
 export const bashRules = {
   "*": "ask",
   bx: "allow",
@@ -95,11 +105,22 @@ export const bashRules = {
 // ─── Agent Skills ──────────────────────────────────────────────────────────────
 //
 // Per-agent skill assignments. Overrides any `skills` in the JSONC template.
-// Omitted agents get no skills array (removed if present in template).
+// All agents are listed below to ensure code-search tools are loaded for everyone.
 //
 export const agentSkills = {
+  sisyphus: ["code-search", "bx"],
+  ultrawork: ["code-search", "bx"],
   explore: ["code-search", "bx"],
+  general: ["code-search", "bx"],
+  oracle: ["code-search", "bx"],
   librarian: ["code-search", "bx"],
+  prometheus: ["code-search", "bx"],
+  metis: ["code-search", "bx"],
+  atlas: ["code-search", "bx"],
+  "sisyphus-junior": ["code-search", "bx"],
+  momus: ["code-search", "bx"],
+  hephaestus: ["code-search", "bx"],
+  "multimodal-looker": ["code-search", "bx"],
   reviewer: ["deep-code-review", "code-search"],
 };
 
@@ -206,15 +227,63 @@ ${WEB_SEARCH_POLICY}
 - When searching external resources, libraries and frameworks, use the bx skill for web search. No other web search tool is allowed.
  `,
 
-  // ── Web-only agents (no code-search) ──────────────────────────────────────
+  // ── Code-search enabled agents ────────────────────────────────────────────
 
-  prometheus: `${WEB_SEARCH_POLICY}`,
-  metis: `${WEB_SEARCH_POLICY}`,
-  atlas: `${WEB_SEARCH_POLICY}`,
-  "sisyphus-junior": `${WEB_SEARCH_POLICY}`,
-  momus: `${WEB_SEARCH_POLICY}`,
-  hephaestus: `${WEB_SEARCH_POLICY}`,
-  "multimodal-looker": `${WEB_SEARCH_POLICY}`,
+  prometheus: `
+## Tool policy
+Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+${CODE_SEARCH_TOOLS_LIST}
+${PROHIBITED_TOOLS}
+${WEB_SEARCH_POLICY}
+ `,
+
+  metis: `
+## Tool policy
+Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+${CODE_SEARCH_TOOLS_LIST}
+${PROHIBITED_TOOLS}
+${WEB_SEARCH_POLICY}
+ `,
+
+  atlas: `
+## Tool policy
+Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+${CODE_SEARCH_TOOLS_LIST}
+${PROHIBITED_TOOLS}
+${WEB_SEARCH_POLICY}
+ `,
+
+  "sisyphus-junior": `
+## Tool policy
+Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+${CODE_SEARCH_TOOLS_LIST}
+${PROHIBITED_TOOLS}
+${WEB_SEARCH_POLICY}
+ `,
+
+  momus: `
+## Tool policy
+Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+${CODE_SEARCH_TOOLS_LIST}
+${PROHIBITED_TOOLS}
+${WEB_SEARCH_POLICY}
+ `,
+
+  hephaestus: `
+## Tool policy
+Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+${CODE_SEARCH_TOOLS_LIST}
+${PROHIBITED_TOOLS}
+${WEB_SEARCH_POLICY}
+ `,
+
+  "multimodal-looker": `
+## Tool policy
+Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+${CODE_SEARCH_TOOLS_LIST}
+${PROHIBITED_TOOLS}
+${WEB_SEARCH_POLICY}
+ `,
   reviewer: `
 ## You are a senior code reviewer
 You perform thorough, structured code reviews. You have access to:

@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from 'fs';
-import { join, dirname } from 'path';
+import { join } from 'path';
+import ignore from 'ignore';
 
 export interface IgnoreOptions {
   patterns: string[];
@@ -7,39 +8,41 @@ export interface IgnoreOptions {
 }
 
 export class IgnoreManager {
-  private rules: RegExp[] = [];
+  private dirRules: Map<string, ReturnType<typeof ignore>> = new Map();
+  private _rootDir: string;
   private _loadedGitignoreDirs: Set<string> = new Set();
 
-  constructor(patterns: string[] = []) {
-    this.addPatterns(patterns);
+  constructor(rootDir: string, patterns: string[] = []) {
+    const normalizedRoot = rootDir.replace(/\\/g, '/').replace(/\/+$/, '');
+    this._rootDir = normalizedRoot;
+    const ig = ignore().add(patterns.length > 0 ? patterns : this.getDefaultPatterns());
+    this.dirRules.set(normalizedRoot, ig);
   }
 
   static async fromDirectory(rootDir: string): Promise<IgnoreManager> {
-    const manager = new IgnoreManager();
-
-    manager.addDefaultPatterns();
+    const manager = new IgnoreManager(rootDir);
 
     const gitignorePath = join(rootDir, '.gitignore');
     if (existsSync(gitignorePath)) {
       try {
-        const gitignore = readFileSync(gitignorePath, 'utf-8');
-        manager.addGitignoreRules(gitignore);
+        const content = readFileSync(gitignorePath, 'utf-8');
+        manager.addGitignoreRules(content);
       } catch {}
     }
 
     const indexignorePath = join(rootDir, '.indexignore');
     if (existsSync(indexignorePath)) {
       try {
-        const indexignore = readFileSync(indexignorePath, 'utf-8');
-        manager.addGitignoreRules(indexignore);
+        const content = readFileSync(indexignorePath, 'utf-8');
+        manager.addGitignoreRules(content);
       } catch {}
     }
 
     return manager;
   }
 
-  private addDefaultPatterns(): void {
-    this.addPatterns([
+  private getDefaultPatterns(): string[] {
+    return [
       'node_modules',
       '.git',
       'dist',
@@ -57,122 +60,93 @@ export class IgnoreManager {
       'pnpm-lock.yaml',
       'package-lock.json',
       'yarn.lock',
-    ]);
+      'coverage',
+      '.nyc_output',
+      '.pytest_cache',
+      '.env',
+      'venv',
+      '.venv',
+      '.turbo',
+      '.vercel',
+      '.netlify',
+      '.serverless',
+      '*.min.js',
+      '*.min.css',
+      '*.map',
+    ];
   }
 
-  addPatterns(patterns: string[]): void {
-    for (const pattern of patterns) {
-      if (!pattern || pattern.startsWith('#')) continue;
-      const regex = this.gitignoreToRegex(pattern);
-      if (regex) this.rules.push(regex);
+  addPatterns(patterns: string[], dirPath?: string): void {
+    const normalizedDir = (dirPath ?? this._rootDir).replace(/\\/g, '/').replace(/\/+$/, '');
+
+    let ig = this.dirRules.get(normalizedDir);
+    if (!ig) {
+      ig = ignore();
+      this.dirRules.set(normalizedDir, ig);
     }
+
+    ig.add(patterns);
   }
 
-  /**
-   * Load .gitignore and .indexignore for a directory.
-   * Safe to call multiple times — will only load once per directory.
-   */
   loadGitignoreForDir(dirPath: string): void {
-    const normalizedDir = dirPath.replace(/\\/g, '/');
+    const normalizedDir = dirPath.replace(/\\/g, '/').replace(/\/+$/, '');
     if (this._loadedGitignoreDirs.has(normalizedDir)) return;
     this._loadedGitignoreDirs.add(normalizedDir);
 
     const gitignorePath = join(dirPath, '.gitignore');
     if (existsSync(gitignorePath)) {
       try {
-        const gitignore = readFileSync(gitignorePath, 'utf-8');
-        this.addGitignoreRules(gitignore);
-      } catch { /* ignore unreadable */ }
+        const content = readFileSync(gitignorePath, 'utf-8');
+        this.addGitignoreRules(content, dirPath);
+      } catch {}
     }
 
     const indexignorePath = join(dirPath, '.indexignore');
     if (existsSync(indexignorePath)) {
       try {
-        const indexignore = readFileSync(indexignorePath, 'utf-8');
-        this.addGitignoreRules(indexignore);
-      } catch { /* ignore unreadable */ }
+        const content = readFileSync(indexignorePath, 'utf-8');
+        this.addGitignoreRules(content, dirPath);
+      } catch {}
     }
   }
 
-  addGitignoreRules(content: string): void {
-    const patterns = content.split('\n');
-    this.addPatterns(patterns);
+  addGitignoreRules(content: string, dirPath?: string): void {
+    const patterns = content
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line && !line.startsWith('#'));
+    this.addPatterns(patterns, dirPath);
   }
 
-  private gitignoreToRegex(pattern: string): RegExp | null {
-    const p = pattern.trim();
-    if (!p) return null;
+  isIgnored(fullPath: string): boolean {
+    const normalizedPath = fullPath.replace(/\\/g, '/');
 
-    let regexStr = '';
-    let i = 0;
-    const len = p.length;
-
-    const isNegated = p.startsWith('!');
-    if (isNegated) return null;
-
-    const isDirectoryOnly = p.endsWith('/');
-    const pClean = isDirectoryOnly ? p.slice(0, -1) : p;
-
-    const isNegatedPattern = pClean.startsWith('!');
-    if (isNegatedPattern) return null;
-
-    regexStr += '^';
-
-    if (p.startsWith('/')) {
-      regexStr += '';
-      i++;
-    } else if (p.includes('/')) {
-      regexStr += '.*/';
-    } else {
-      regexStr += '.*/';
+    if (!normalizedPath.startsWith(this._rootDir + '/')) {
+      return false;
     }
 
-    while (i < len) {
-      const char = p[i];
-      if (char === '*') {
-        if (p[i + 1] === '*') {
-          regexStr += '.*';
-          i += 2;
-          if (p[i] === '/') regexStr += '/';
-        } else {
-          regexStr += '[^/]*';
-          i++;
+    const relPath = normalizedPath.slice(this._rootDir.length + 1);
+    const parts = relPath.split('/');
+
+    const rootIg = this.dirRules.get(this._rootDir);
+    if (rootIg && rootIg.ignores(relPath)) {
+      return true;
+    }
+
+    let prefix = '';
+    for (let i = 0; i < parts.length - 1; i++) {
+      const part = parts[i]!;
+      prefix = prefix ? `${prefix}/${part}` : part;
+      const dirKey = `${this._rootDir}/${prefix}`;
+      const ig = this.dirRules.get(dirKey);
+      if (ig) {
+        const relToDir = relPath.slice(prefix.length + 1);
+        if (ig.ignores(relToDir)) {
+          return true;
         }
-      } else if (char === '?') {
-        regexStr += '[^/]';
-        i++;
-      } else if (char === '.') {
-        regexStr += '\\.';
-        i++;
-      } else if (char === '/') {
-        regexStr += '/';
-        i++;
-      } else {
-        regexStr += char;
-        i++;
       }
     }
 
-    if (isDirectoryOnly) {
-      regexStr += '(/.*)?';
-    } else {
-      regexStr += '(/.*)?$';
-    }
-
-    try {
-      return new RegExp(regexStr);
-    } catch {
-      return null;
-    }
-  }
-
-  isIgnored(filePath: string): boolean {
-    const normalizedPath = filePath.replace(/\\/g, '/');
-    for (const rule of this.rules) {
-      if (rule.test(normalizedPath)) {
-        return true;
-      }
-    }
     return false;
   }
 }

@@ -16,6 +16,7 @@
   "dependencies": {
     "@opencode-telegram/bot": "workspace:*",
     "axios": "^1.6.0",
-    "better-sqlite3": "^11.0.0"
+    "better-sqlite3": "^11.0.0",
+    "ignore": "^7.0.5"
   }
 }
