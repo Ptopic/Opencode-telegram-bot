@@ -8,6 +8,7 @@ export interface IgnoreOptions {
 
 export class IgnoreManager {
   private rules: RegExp[] = [];
+  private _loadedGitignoreDirs: Set<string> = new Set();
 
   constructor(patterns: string[] = []) {
     this.addPatterns(patterns);
@@ -64,6 +65,32 @@ export class IgnoreManager {
       if (!pattern || pattern.startsWith('#')) continue;
       const regex = this.gitignoreToRegex(pattern);
       if (regex) this.rules.push(regex);
+    }
+  }
+
+  /**
+   * Load .gitignore and .indexignore for a directory.
+   * Safe to call multiple times — will only load once per directory.
+   */
+  loadGitignoreForDir(dirPath: string): void {
+    const normalizedDir = dirPath.replace(/\\/g, '/');
+    if (this._loadedGitignoreDirs.has(normalizedDir)) return;
+    this._loadedGitignoreDirs.add(normalizedDir);
+
+    const gitignorePath = join(dirPath, '.gitignore');
+    if (existsSync(gitignorePath)) {
+      try {
+        const gitignore = readFileSync(gitignorePath, 'utf-8');
+        this.addGitignoreRules(gitignore);
+      } catch { /* ignore unreadable */ }
+    }
+
+    const indexignorePath = join(dirPath, '.indexignore');
+    if (existsSync(indexignorePath)) {
+      try {
+        const indexignore = readFileSync(indexignorePath, 'utf-8');
+        this.addGitignoreRules(indexignore);
+      } catch { /* ignore unreadable */ }
     }
   }
 

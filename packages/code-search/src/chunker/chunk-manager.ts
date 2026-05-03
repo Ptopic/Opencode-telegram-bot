@@ -58,6 +58,7 @@ export class ChunkManager {
     const scanDir = async (dir: string): Promise<string[]> => {
       const files: string[] = [];
       try {
+        ignoreManager.loadGitignoreForDir(dir);
         const entries = readdirSync(dir, { withFileTypes: true });
         for (const entry of entries) {
           const fullPath = join(dir, entry.name);

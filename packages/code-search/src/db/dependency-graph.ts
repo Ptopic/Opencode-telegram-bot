@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, dirname, extname } from 'path';
 import { v4 as uuid } from 'uuid';
 import type { DependencyEdge, DependencyGraph } from '../types.js';
+import { IgnoreManager } from '../util/ignore-manager.js';
 
 export type SupportedLanguage = 'typescript' | 'javascript' | 'python' | 'go';
 
@@ -34,11 +35,6 @@ const LANGUAGE_EXTENSIONS: Record<string, SupportedLanguage> = {
   '.ts': 'typescript', '.tsx': 'typescript', '.js': 'javascript', '.jsx': 'javascript',
   '.py': 'python', '.go': 'go',
 };
-
-const DEFAULT_IGNORE_PATTERNS = new Set([
-  'node_modules', '.git', 'dist', 'build', '.next', '.nuxt',
-  '__pycache__', 'target', '.venv', 'venv', '.env', 'coverage', '.cache',
-]);
 
 export function normalizeImportPath(importPath: string, sourceFile: string, _projectRoot: string): string {
   let normalized = importPath.replace(/[?#].*$/, '');
@@ -282,16 +278,17 @@ export function extractFunctionCalls(content: string, language: string): Functio
   return extractJSCalls(content);
 }
 
-function scanDirectory(dirPath: string, ignorePatterns: Set<string> = DEFAULT_IGNORE_PATTERNS): string[] {
+function scanDirectory(dirPath: string, ignoreManager: IgnoreManager): string[] {
   const files: string[] = [];
   const extensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.py', '.go']);
 
   const scan = (dir: string): void => {
     try {
+      ignoreManager.loadGitignoreForDir(dir);
       const entries = readdirSync(dir, { withFileTypes: true });
       for (const entry of entries) {
-        if (ignorePatterns.has(entry.name)) continue;
         const fullPath = join(dir, entry.name);
+        if (ignoreManager.isIgnored(fullPath)) continue;
         if (entry.isDirectory()) {
           scan(fullPath);
         } else if (entry.isFile() && extensions.has(extname(entry.name))) {
@@ -309,9 +306,12 @@ export async function buildDependencyGraph(
   projectPath: string,
   options?: { ignorePatterns?: string[]; fileExtensions?: string[] }
 ): Promise<DependencyGraph> {
-  const ignorePatterns = new Set(options?.ignorePatterns ?? Array.from(DEFAULT_IGNORE_PATTERNS));
+  const ignoreManager = await IgnoreManager.fromDirectory(projectPath);
+  if (options?.ignorePatterns) {
+    ignoreManager.addPatterns(options.ignorePatterns);
+  }
 
-  const files = scanDirectory(projectPath, ignorePatterns);
+  const files = scanDirectory(projectPath, ignoreManager);
   const importIndex: ImportIndex = {};
   const fileIdMap = new Map<string, string>();
 
