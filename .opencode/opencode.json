@@ -7,6 +7,10 @@
     "webfetch": "deny",
     "web-search-prime_web_search_prime": "deny",
     "websearch_web_search_exa": "deny",
+    "grep_app_searchGitHub": "deny",
+    "context7_resolve-library-id": "deny",
+    "context7_query-docs": "deny",
+    "grep": "deny",
     "bash": {
       "*": "ask",
       "bx": "allow",

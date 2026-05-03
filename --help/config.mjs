@@ -82,6 +82,16 @@ export const deniedTools = [
   "webfetch",
   "web-search-prime_web_search_prime",
   "websearch_web_search_exa",
+
+  // GitHub search (use code-search + read + grep instead)
+  "grep_app_searchGitHub",
+
+  // Context7 docs (use bx skill instead)
+  "context7_resolve-library-id",
+  "context7_query-docs",
+
+  // Shell-based text search (use code-search instead)
+  "grep",
 ];
 
 export const askTools = [];
@@ -108,19 +118,19 @@ export const bashRules = {
 // All agents are listed below to ensure code-search tools are loaded for everyone.
 //
 export const agentSkills = {
-  sisyphus: ["code-search", "bx"],
-  ultrawork: ["code-search", "bx"],
-  explore: ["code-search", "bx"],
-  general: ["code-search", "bx"],
-  oracle: ["code-search", "bx"],
+  sisyphus: ["code-search"],
+  ultrawork: ["code-search"],
+  explore: ["code-search"],
+  general: ["code-search"],
+  oracle: ["code-search"],
   librarian: ["code-search", "bx"],
-  prometheus: ["code-search", "bx"],
-  metis: ["code-search", "bx"],
-  atlas: ["code-search", "bx"],
-  "sisyphus-junior": ["code-search", "bx"],
-  momus: ["code-search", "bx"],
-  hephaestus: ["code-search", "bx"],
-  "multimodal-looker": ["code-search", "bx"],
+  prometheus: ["code-search"],
+  metis: ["code-search"],
+  atlas: ["code-search"],
+  "sisyphus-junior": ["code-search"],
+  momus: ["code-search"],
+  hephaestus: ["code-search"],
+  "multimodal-looker": ["code-search"],
   reviewer: ["deep-code-review", "code-search"],
 };
 
@@ -140,6 +150,8 @@ const CODE_SEARCH_TOOLS_LIST = `
 ## Code-Search Tools (USE THESE)
 - code_search - Semantic code search using natural language queries
 - code_search_code_search - Find code by meaning, not just exact matches
+  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query
+  • Example: exactSearch: true, query: "function myFunction" or exactSearch: true, query: "console\\.log"
 - code_search_code_graph_search - Graph-based code search
 - code_search_code_graph_context - Get detailed context for a graph node
 - code_search_code_graph_callers - Find all functions that call a specific function
@@ -150,13 +162,19 @@ const CODE_SEARCH_TOOLS_LIST = `
 - code_search_code_watch_start - Start watching paths for changes
 - code_search_code_watch_stop - Stop watching paths
 - code_search_code_dead_code - Find potentially dead code
-- read - Read file contents (use after code-search finds exact file paths)
-- grep / rg - only use after code_search returns exact file paths or results, for narrowing to a specific section`;
+- read - Read file contents (use after code-search finds exact file paths)`;
+
+const CODE_SEARCH_DELEGATION_RULE = `
+## Delegation Rule
+When delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.`;
 
 const PROHIBITED_TOOLS = `
 ## PROHIBITED TOOLS (NEVER use — blocked at config level)
 - ast_grep_search, ast_grep_replace - use code_search instead
-- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead`;
+- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead
+- grep_app_searchGitHub - use code_search + read for code discovery instead
+- grep, rg - use code_search + read for code discovery instead
+- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead`;
 
 const WEB_SEARCH_POLICY = `
 ## Web Search Policy (MANDATORY)
@@ -171,124 +189,124 @@ export const agentPrompts = {
 
   sisyphus: `
 ## Tool policy
-You MUST use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. Do NOT use glob, find, fd, ls, cat, sed, awk, bash search, ast_grep_search, ast_grep_replace, or similar tools for initial discovery. When delegating tasks to subagents, instruct them to follow the same code_search-first workflow.
+You MUST use code_search for ALL code discovery. The standard workflow is code_search → read. Do NOT use glob, find, fd, ls, cat, sed, awk, bash search, ast_grep_search, ast_grep_replace, grep, rg, or similar tools for initial discovery.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
-- When delegating to subagents, instruct them to also use only bx for web search. Never allow subagents to use MiniMax web search, webfetch, or any other non-Brave search tool.
+${CODE_SEARCH_DELEGATION_RULE}
  `,
 
   ultrawork: `
 ## Tool policy
-Use code_search first for repository inspection. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based discovery for the initial search.
+Use code_search for ALL repository inspection. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or any shell-based discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
+${CODE_SEARCH_DELEGATION_RULE}
  `,
 
   explore: `
 ## Tool policy
-Use code_search for initial code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+Use code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, grep_app_searchGitHub, context7_resolve-library-id, context7_query-docs, or shell-based discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
+${CODE_SEARCH_DELEGATION_RULE}
  `,
 
   general: `
 ## Repository inspection workflow
-Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. Do NOT use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based tool for the initial search.
+Use code_search for ALL code discovery. The standard workflow is code_search → read. Do NOT use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or any shell-based tool for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
-## code-search first, read second
+${CODE_SEARCH_DELEGATION_RULE}
+## Recommended workflow
 When you need to find code:
 1. Use code-search_code_search with natural language query
 2. Use code-search_code_graph_* for dependency relationships
-3. Use read for file contents once you have exact file paths from code-search results
-4. Use grep/rg only as a follow-up filter on those returned results or files
+3. Use read for file contents once you have exact file paths
+4. Re-phrase the query or try code_search_code_graph_search if results are not found — never fall back to grep/rg
  `,
 
   oracle: `
 ## Repository inspection workflow
-Base code analysis on a code_search-first workflow. Only after code_search returns exact file paths or results may grep or rg be used to narrow to a specific section. Do NOT request or use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based tool for initial discovery.
+Base ALL code analysis on code_search → read. Do NOT request or use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or any shell-based tool for initial discovery.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
 ## Analysis approach
 When debugging or analyzing architecture, always start with code-search to understand the codebase structure before forming hypotheses.
  `,
 
   librarian: `
 ## Repository inspection workflow
-Use code_search first for code/document discovery within this repository. Only after code_search returns exact file paths or results may grep or rg be used to narrow to a specific section. Never use glob, list, bash, find, fd, ls, cat, sed, awk, ast_grep_search, ast_grep_replace, or shell discovery for the initial search.
+Use code_search for ALL code/document discovery within this repository. The standard workflow is code_search → read. Never use glob, list, bash, find, fd, ls, cat, sed, awk, ast_grep_search, ast_grep_replace, grep, rg, grep_app_searchGitHub, context7_resolve-library-id, context7_query-docs, or shell discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
 ${WEB_SEARCH_POLICY}
 - When searching external resources, libraries and frameworks, use the bx skill for web search. No other web search tool is allowed.
+- NEVER use grep_app_searchGitHub for literal code patterns on GitHub — use code_search + read within the local codebase instead.
+- NEVER use context7_resolve-library-id or context7_query-docs for documentation — use the bx skill or read files directly.
  `,
 
   // ── Code-search enabled agents ────────────────────────────────────────────
 
   prometheus: `
 ## Tool policy
-Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+Use code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
+${CODE_SEARCH_DELEGATION_RULE}
  `,
 
   metis: `
 ## Tool policy
-Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+Use code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
+${CODE_SEARCH_DELEGATION_RULE}
  `,
 
   atlas: `
 ## Tool policy
-Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+Use code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
+${CODE_SEARCH_DELEGATION_RULE}
  `,
 
   "sisyphus-junior": `
 ## Tool policy
-Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+Use code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
+${CODE_SEARCH_DELEGATION_RULE}
  `,
 
   momus: `
 ## Tool policy
-Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+Use code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
+${CODE_SEARCH_DELEGATION_RULE}
  `,
 
   hephaestus: `
 ## Tool policy
-Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+Use code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
+${CODE_SEARCH_DELEGATION_RULE}
  `,
 
   "multimodal-looker": `
 ## Tool policy
-Use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.
+Use code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.
 ${CODE_SEARCH_TOOLS_LIST}
 ${PROHIBITED_TOOLS}
-${WEB_SEARCH_POLICY}
+${CODE_SEARCH_DELEGATION_RULE}
  `,
   reviewer: `
 ## You are a senior code reviewer
 You perform thorough, structured code reviews. You have access to:
 - code-search tools for code discovery
-- bash for running linters, tests, and git diffs
+- bash for running linters, tests, and git diffs (restricted to non-web commands)
 - edit/write for applying targeted fixes
 
 When a review is requested:

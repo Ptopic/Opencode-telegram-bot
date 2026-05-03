@@ -16,12 +16,17 @@
   "agents": {
     "sisyphus": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -30,23 +35,35 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Tool policy\nYou MUST use code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. Do NOT use glob, find, fd, ls, cat, sed, awk, bash search, ast_grep_search, ast_grep_replace, or similar tools for initial discovery. When delegating tasks to subagents, instruct them to follow the same code_search-first workflow.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n- grep / rg - only use after code_search returns exact file paths or results, for narrowing to a specific section\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.\n- When delegating to subagents, instruct them to also use only bx for web search. Never allow subagents to use MiniMax web search, webfetch, or any other non-Brave search tool.\n ",
+      "prompt_append": "\n## Tool policy\nYou MUST use code_search for ALL code discovery. The standard workflow is code_search → read. Do NOT use glob, find, fd, ls, cat, sed, awk, bash search, ast_grep_search, ast_grep_replace, grep, rg, or similar tools for initial discovery.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Delegation Rule\nWhen delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.\n ",
+      "skills": [
+        "code-search"
+      ],
       "model": "synthetic/hf:moonshotai/Kimi-K2.6"
     },
     "ultrawork": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -55,23 +72,35 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Tool policy\nUse code_search first for repository inspection. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n- grep / rg - only use after code_search returns exact file paths or results, for narrowing to a specific section\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.\n ",
+      "prompt_append": "\n## Tool policy\nUse code_search for ALL repository inspection. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or any shell-based discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Delegation Rule\nWhen delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.\n ",
+      "skills": [
+        "code-search"
+      ],
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed"
     },
     "explore": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -80,27 +109,35 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Tool policy\nUse code_search for initial code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or shell-based discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n- grep / rg - only use after code_search returns exact file paths or results, for narrowing to a specific section\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.\n ",
+      "prompt_append": "\n## Tool policy\nUse code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, grep_app_searchGitHub, context7_resolve-library-id, context7_query-docs, or shell-based discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Delegation Rule\nWhen delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.\n ",
       "skills": [
-        "code-search",
-        "bx"
+        "code-search"
       ],
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed"
     },
     "general": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -109,23 +146,35 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Repository inspection workflow\nUse code_search first for code discovery. Only after code_search returns exact file paths or results may you use grep or rg to narrow to a specific section. Do NOT use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based tool for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n- grep / rg - only use after code_search returns exact file paths or results, for narrowing to a specific section\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.\n## code-search first, read second\nWhen you need to find code:\n1. Use code-search_code_search with natural language query\n2. Use code-search_code_graph_* for dependency relationships\n3. Use read for file contents once you have exact file paths from code-search results\n4. Use grep/rg only as a follow-up filter on those returned results or files\n ",
+      "prompt_append": "\n## Repository inspection workflow\nUse code_search for ALL code discovery. The standard workflow is code_search → read. Do NOT use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or any shell-based tool for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Delegation Rule\nWhen delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.\n## Recommended workflow\nWhen you need to find code:\n1. Use code-search_code_search with natural language query\n2. Use code-search_code_graph_* for dependency relationships\n3. Use read for file contents once you have exact file paths\n4. Re-phrase the query or try code_search_code_graph_search if results are not found — never fall back to grep/rg\n ",
+      "skills": [
+        "code-search"
+      ],
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed"
     },
     "oracle": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -134,23 +183,35 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Repository inspection workflow\nBase code analysis on a code_search-first workflow. Only after code_search returns exact file paths or results may grep or rg be used to narrow to a specific section. Do NOT request or use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, or any shell-based tool for initial discovery.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n- grep / rg - only use after code_search returns exact file paths or results, for narrowing to a specific section\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.\n## Analysis approach\nWhen debugging or analyzing architecture, always start with code-search to understand the codebase structure before forming hypotheses.\n ",
+      "prompt_append": "\n## Repository inspection workflow\nBase ALL code analysis on code_search → read. Do NOT request or use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or any shell-based tool for initial discovery.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n## Analysis approach\nWhen debugging or analyzing architecture, always start with code-search to understand the codebase structure before forming hypotheses.\n ",
+      "skills": [
+        "code-search"
+      ],
       "model": "synthetic/hf:moonshotai/Kimi-K2.6"
     },
     "librarian": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -159,13 +220,17 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Repository inspection workflow\nUse code_search first for code/document discovery within this repository. Only after code_search returns exact file paths or results may grep or rg be used to narrow to a specific section. Never use glob, list, bash, find, fd, ls, cat, sed, awk, ast_grep_search, ast_grep_replace, or shell discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n- grep / rg - only use after code_search returns exact file paths or results, for narrowing to a specific section\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.\n- When searching external resources, libraries and frameworks, use the bx skill for web search. No other web search tool is allowed.\n ",
+      "prompt_append": "\n## Repository inspection workflow\nUse code_search for ALL code/document discovery within this repository. The standard workflow is code_search → read. Never use glob, list, bash, find, fd, ls, cat, sed, awk, ast_grep_search, ast_grep_replace, grep, rg, grep_app_searchGitHub, context7_resolve-library-id, context7_query-docs, or shell discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.\n- When searching external resources, libraries and frameworks, use the bx skill for web search. No other web search tool is allowed.\n- NEVER use grep_app_searchGitHub for literal code patterns on GitHub — use code_search + read within the local codebase instead.\n- NEVER use context7_resolve-library-id or context7_query-docs for documentation — use the bx skill or read files directly.\n ",
       "skills": [
         "code-search",
         "bx"
@@ -174,12 +239,17 @@
     },
     "prometheus": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -188,23 +258,35 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.",
+      "prompt_append": "\n## Tool policy\nUse code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Delegation Rule\nWhen delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.\n ",
+      "skills": [
+        "code-search"
+      ],
       "model": "synthetic/hf:moonshotai/Kimi-K2.6"
     },
     "metis": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -213,23 +295,35 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.",
+      "prompt_append": "\n## Tool policy\nUse code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Delegation Rule\nWhen delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.\n ",
+      "skills": [
+        "code-search"
+      ],
       "model": "synthetic/hf:moonshotai/Kimi-K2.6"
     },
     "atlas": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -238,23 +332,35 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.",
+      "prompt_append": "\n## Tool policy\nUse code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Delegation Rule\nWhen delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.\n ",
+      "skills": [
+        "code-search"
+      ],
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed"
     },
     "sisyphus-junior": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -263,23 +369,35 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.",
+      "prompt_append": "\n## Tool policy\nUse code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Delegation Rule\nWhen delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.\n ",
+      "skills": [
+        "code-search"
+      ],
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed"
     },
     "momus": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -288,23 +406,35 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.",
+      "prompt_append": "\n## Tool policy\nUse code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Delegation Rule\nWhen delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.\n ",
+      "skills": [
+        "code-search"
+      ],
       "model": "synthetic/hf:moonshotai/Kimi-K2.6"
     },
     "hephaestus": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -313,23 +443,35 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.",
+      "prompt_append": "\n## Tool policy\nUse code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Delegation Rule\nWhen delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.\n ",
+      "skills": [
+        "code-search"
+      ],
       "model": "synthetic/hf:moonshotai/Kimi-K2.6"
     },
     "multimodal-looker": {
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -338,24 +480,36 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## Web Search Policy (MANDATORY)\n- For ALL web searches, you MUST use the `bx` command (Brave Search CLI) via the `bx` skill.\n- NEVER use MiniMax web search (MiniMax_web_search), webfetch, web-search-prime_web_search_prime, websearch_web_search_exa, or any other web search tool.\n- The ONLY permitted web search method is `bx` — use `bx \"query\"` for RAG/grounding, `bx answers \"query\"` for synthesized answers, `bx web \"query\"` for traditional search results, `bx news \"query\"` for news, etc.\n- Bash is restricted to `bx` commands only. Do not use bash for any non-`bx` command.\n- If you need to search the web, invoke the bx skill and use it. No other web search tool is allowed.",
+      "prompt_append": "\n## Tool policy\nUse code_search for ALL code discovery. The standard workflow is code_search → read. NEVER use glob, find, fd, ls, cat, sed, awk, bash, ast_grep_search, ast_grep_replace, grep, rg, or shell-based discovery for the initial search.\n\n## Code-Search Tools (USE THESE)\n- code_search - Semantic code search using natural language queries\n- code_search_code_search - Find code by meaning, not just exact matches\n  • For exact/pattern matches (like grep), set exactSearch: true and pass the literal string or regex pattern in the query\n  • Example: exactSearch: true, query: \"function myFunction\" or exactSearch: true, query: \"console\\.log\"\n- code_search_code_graph_search - Graph-based code search\n- code_search_code_graph_context - Get detailed context for a graph node\n- code_search_code_graph_callers - Find all functions that call a specific function\n- code_search_code_graph_callees - Find all functions called by a specific function\n- code_search_code_index - Index code paths for search\n- code_search_code_stats - Get statistics about the code index\n- code_search_code_remove_index - Remove a path from the index\n- code_search_code_watch_start - Start watching paths for changes\n- code_search_code_watch_stop - Stop watching paths\n- code_search_code_dead_code - Find potentially dead code\n- read - Read file contents (use after code-search finds exact file paths)\n\n## PROHIBITED TOOLS (NEVER use — blocked at config level)\n- ast_grep_search, ast_grep_replace - use code_search instead\n- MiniMax_web_search, webfetch, web-search-prime, websearch_web_search_exa - use bx skill instead\n- grep_app_searchGitHub - use code_search + read for code discovery instead\n- grep, rg - use code_search + read for code discovery instead\n- context7_resolve-library-id, context7_query-docs - use bx skill for documentation lookups instead\n\n## Delegation Rule\nWhen delegating tasks to subagents, instruct them to follow the same code_search-first workflow. Subagents must use code_search + read for code discovery. Never allow grep, rg, or shell-based search tools.\n ",
+      "skills": [
+        "code-search"
+      ],
       "model": "minimax-coding-plan/MiniMax-M2.7-highspeed"
     },
     "reviewer": {
       "description": "Senior code reviewer — performs thorough, structured reviews across correctness, security, performance, maintainability, and style.",
       "tools": {
+        "code-search_*": true,
         "ast_grep_search": false,
         "ast_grep_replace": false,
         "MiniMax_web_search": false,
         "webfetch": false,
         "web-search-prime_web_search_prime": false,
-        "websearch_web_search_exa": false
+        "websearch_web_search_exa": false,
+        "grep_app_searchGitHub": false,
+        "context7_resolve-library-id": false,
+        "context7_query-docs": false,
+        "grep": false
       },
       "permission": {
         "ast_grep_search": "deny",
@@ -364,13 +518,17 @@
         "webfetch": "deny",
         "web-search-prime_web_search_prime": "deny",
         "websearch_web_search_exa": "deny",
+        "grep_app_searchGitHub": "deny",
+        "context7_resolve-library-id": "deny",
+        "context7_query-docs": "deny",
+        "grep": "deny",
         "bash": {
           "*": "ask",
           "bx": "allow",
           "bx *": "allow"
         }
       },
-      "prompt_append": "\n## You are a senior code reviewer\nYou perform thorough, structured code reviews. You have access to:\n- code-search tools for code discovery\n- bash for running linters, tests, and git diffs\n- edit/write for applying targeted fixes\n\nWhen a review is requested:\n1. Load the deep-code-review skill (it will be injected automatically)\n2. Run pre-flight checks (npm run lint, git diff, etc.)\n3. Review all files in scope across all 5 categories\n4. Triage findings as CRITICAL / WARNING / SUGGESTION / INFO\n5. Present findings in the structured output format defined in your skill\n\nAlways quote actual code in findings. Explain why something is a problem, not just what is wrong.\n ",
+      "prompt_append": "\n## You are a senior code reviewer\nYou perform thorough, structured code reviews. You have access to:\n- code-search tools for code discovery\n- bash for running linters, tests, and git diffs (restricted to non-web commands)\n- edit/write for applying targeted fixes\n\nWhen a review is requested:\n1. Load the deep-code-review skill (it will be injected automatically)\n2. Run pre-flight checks (npm run lint, git diff, etc.)\n3. Review all files in scope across all 5 categories\n4. Triage findings as CRITICAL / WARNING / SUGGESTION / INFO\n5. Present findings in the structured output format defined in your skill\n\nAlways quote actual code in findings. Explain why something is a problem, not just what is wrong.\n ",
       "skills": [
         "deep-code-review",
         "code-search"
@@ -454,7 +612,11 @@
     "MiniMax_web_search": false,
     "webfetch": false,
     "web-search-prime_web_search_prime": false,
-    "websearch_web_search_exa": false
+    "websearch_web_search_exa": false,
+    "grep_app_searchGitHub": false,
+    "context7_resolve-library-id": false,
+    "context7_query-docs": false,
+    "grep": false
   },
   "permission": {
     "ast_grep_search": "deny",
@@ -463,6 +625,10 @@
     "webfetch": "deny",
     "web-search-prime_web_search_prime": "deny",
     "websearch_web_search_exa": "deny",
+    "grep_app_searchGitHub": "deny",
+    "context7_resolve-library-id": "deny",
+    "context7_query-docs": "deny",
+    "grep": "deny",
     "bash": {
       "*": "ask",
       "bx": "allow",
