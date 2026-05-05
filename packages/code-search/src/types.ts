@@ -87,11 +87,14 @@ export interface ChunkingOptions {
 }
 
 export interface EmbedderConfig {
-  provider: 'voyage' | 'openai' | 'local';
+  provider: 'jina' | 'voyage' | 'openai' | 'local';
   model?: string;
   apiKey?: string;
   baseUrl?: string;
   batchSize?: number;
+  maxRetries?: number;
+  baseDelayMs?: number;
+  interBatchDelayMs?: number;
 }
 
 export interface DatabaseConfig {
@@ -124,5 +127,5 @@ export interface ServerConfig {
   cors?: boolean;
 }
 
-export const EMBEDDING_DIMENSIONS = 3072 as const;
-export type EmbeddingDimensions = 1536;
+export const EMBEDDING_DIMENSIONS = 1024 as const; // Jina jina-embeddings-v3 native dimension
+export type EmbeddingDimensions = 1024;

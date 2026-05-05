@@ -63,7 +63,7 @@ export interface Config {
     dependencyGraphTable?: string;
   };
   embedder: {
-    provider: 'voyage' | 'openai' | 'local';
+    provider: 'jina' | 'voyage' | 'openai' | 'local';
     model?: string;
     apiKey?: string;
     baseUrl?: string;
@@ -122,9 +122,9 @@ export const DefaultConfig: Config = {
     dependencyGraphTable: 'dependency_graph',
   },
   embedder: {
-    provider: 'openai',
-    model: 'text-embedding-3-large',
-    apiKey: process.env.OPENAI_API_KEY,
+    provider: 'jina',
+    model: 'jina-embeddings-v3',
+    apiKey: process.env.JINA_API_KEY,
   },
   watcher: {
     paths: [],
