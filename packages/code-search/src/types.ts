@@ -87,7 +87,7 @@ export interface ChunkingOptions {
 }
 
 export interface EmbedderConfig {
-  provider: 'jina' | 'voyage' | 'openai' | 'local';
+  provider: 'jina' | 'jina-v2' | 'voyage' | 'openai' | 'local';
   model?: string;
   apiKey?: string;
   baseUrl?: string;
@@ -127,5 +127,28 @@ export interface ServerConfig {
   cors?: boolean;
 }
 
-export const EMBEDDING_DIMENSIONS = 1024 as const; // Jina jina-embeddings-v3 native dimension
-export type EmbeddingDimensions = 1024;
+export const MODEL_DIMENSIONS: Record<string, number> = {
+  'jina-embeddings-v3': 1024,
+  'jina-embeddings-v2-base-code': 768,
+  'text-embedding-3-large': 3072,
+  'text-embedding-3-small': 1536,
+  'voyage-code-2': 1536,
+  'voyage-code-3': 1024,
+};
+
+export const DEFAULT_EMBEDDING_MODEL = 'jina-embeddings-v2-base-code';
+
+export const DEFAULT_EMBEDDING_DIMENSIONS = MODEL_DIMENSIONS[DEFAULT_EMBEDDING_MODEL]!; // 768
+
+/**
+ * @deprecated Use MODEL_DIMENSIONS or getDimensionsForModel() instead
+ */
+export const EMBEDDING_DIMENSIONS: number = DEFAULT_EMBEDDING_DIMENSIONS;
+
+export function getDimensionsForModel(model: string): number {
+  const dims = MODEL_DIMENSIONS[model];
+  if (dims === undefined) {
+    throw new Error(`Unknown embedding model: ${model}. Available: ${Object.keys(MODEL_DIMENSIONS).join(', ')}`);
+  }
+  return dims;
+}

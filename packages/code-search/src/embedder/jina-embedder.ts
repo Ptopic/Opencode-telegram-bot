@@ -1,14 +1,17 @@
 import type { CodeChunk } from '../types.js';
+import { getDimensionsForModel, MODEL_DIMENSIONS, DEFAULT_EMBEDDING_MODEL } from '../types.js';
 
 export interface EmbeddingProvider {
   readonly name: 'jina' | 'voyage' | 'openai' | 'local';
   readonly dimensions: number;
+  readonly modelName?: string;
   embedBatch(texts: string[]): Promise<number[][]>;
   embedQuery(text: string): Promise<number[]>;
   healthCheck(): Promise<boolean>;
 }
 
 export interface ProviderConfig {
+  provider?: 'jina' | 'jina-v2' | 'voyage' | 'openai' | 'local';
   model?: string;
   apiKey?: string;
   baseUrl?: string;
@@ -38,9 +41,10 @@ function backoffDelay(attempt: number, baseMs: number): number {
 
 export class JinaEmbedder implements EmbeddingProvider {
   readonly name = 'jina' as const;
-  readonly dimensions = 1024;
+  readonly modelName: string;
+  private _dimensions: number;
   private apiKey: string = '';
-  private model = 'jina-embeddings-v3';
+  private model = DEFAULT_EMBEDDING_MODEL;
   private baseUrl = 'https://api.jina.ai/v1';
   private batchSize: number;
   private maxRetries: number;
@@ -54,6 +58,17 @@ export class JinaEmbedder implements EmbeddingProvider {
     this.interBatchDelayMs = config.interBatchDelayMs ?? 100;
     if (config.model) this.model = config.model;
     if (config.baseUrl) this.baseUrl = config.baseUrl;
+    try {
+      this._dimensions = getDimensionsForModel(this.model);
+    } catch {
+      console.warn(`[JinaEmbedder] Unknown model '${this.model}', falling back to 1024 dims`);
+      this._dimensions = 1024;
+    }
+    this.modelName = this.model;
+  }
+
+  get dimensions(): number {
+    return this._dimensions;
   }
 
   async initialize(apiKey?: string): Promise<void> {
@@ -90,17 +105,20 @@ export class JinaEmbedder implements EmbeddingProvider {
       let lastError: Error | null = null;
       for (let attempt = 0; attempt < this.maxRetries; attempt++) {
         try {
+          const requestBody: Record<string, unknown> = {
+            model: this.model,
+            input: batch,
+          };
+          if (this.model.includes('v3')) {
+            requestBody.task = 'Retrieval';
+          }
           const response = await fetch(`${this.baseUrl}/embeddings`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${this.apiKey}`,
             },
-            body: JSON.stringify({
-              model: this.model,
-              input: batch,
-              task: ' Retrieval',
-            }),
+            body: JSON.stringify(requestBody),
           });
 
           if (!response.ok) {
@@ -159,7 +177,8 @@ export class JinaEmbedder implements EmbeddingProvider {
 
 export class VoyageEmbedder implements EmbeddingProvider {
   readonly name = 'voyage' as const;
-  readonly dimensions = 1536;
+  readonly modelName: string;
+  private _dimensions: number;
   private apiKey: string = '';
   private model = 'voyage-code-2';
   private baseUrl = 'https://api.voyageai.com/v1';
@@ -175,6 +194,17 @@ export class VoyageEmbedder implements EmbeddingProvider {
     this.interBatchDelayMs = config.interBatchDelayMs ?? 100;
     if (config.model) this.model = config.model;
     if (config.baseUrl) this.baseUrl = config.baseUrl;
+    this.modelName = this.model;
+    try {
+      this._dimensions = getDimensionsForModel(this.model);
+    } catch {
+      console.warn(`[VoyageEmbedder] Unknown model '${this.model}', falling back to 1536 dims`);
+      this._dimensions = 1536;
+    }
+  }
+
+  get dimensions(): number {
+    return this._dimensions;
   }
 
   async initialize(apiKey?: string): Promise<void> {
@@ -279,7 +309,8 @@ export class VoyageEmbedder implements EmbeddingProvider {
 
 export class OpenAIEmbedder implements EmbeddingProvider {
   readonly name = 'openai' as const;
-  readonly dimensions = 3072;
+  readonly modelName: string;
+  private _dimensions: number;
   private apiKey: string = '';
   private model = 'text-embedding-3-large';
   private baseUrl = 'https://api.openai.com/v1';
@@ -289,12 +320,23 @@ export class OpenAIEmbedder implements EmbeddingProvider {
   private interBatchDelayMs: number;
 
   constructor(config: ProviderConfig = {}) {
-    this.batchSize = config.batchSize ?? 50;
+    this.batchSize = config.batchSize ?? 64;
     this.maxRetries = config.maxRetries ?? 5;
     this.baseDelayMs = config.baseDelayMs ?? 2000;
-    this.interBatchDelayMs = config.interBatchDelayMs ?? 200;
+    this.interBatchDelayMs = config.interBatchDelayMs ?? 100;
     if (config.model) this.model = config.model;
     if (config.baseUrl) this.baseUrl = config.baseUrl;
+    this.modelName = this.model;
+    try {
+      this._dimensions = getDimensionsForModel(this.model);
+    } catch {
+      console.warn(`[OpenAIEmbedder] Unknown model '${this.model}', falling back to 3072 dims`);
+      this._dimensions = 3072;
+    }
+  }
+
+  get dimensions(): number {
+    return this._dimensions;
   }
 
   async initialize(apiKey?: string): Promise<void> {
@@ -473,7 +515,7 @@ export class ProviderChain {
         }
         await provider.healthCheck();
         this.initialized = provider;
-        console.log(`[ProviderChain] Primary provider: ${provider.name} (${provider.dimensions} dimensions)`);
+        console.log(`[ProviderChain] Primary provider: ${provider.name} model=${provider.modelName ?? 'default'} (${provider.dimensions} dimensions)`);
         return;
       } catch (err) {
         console.warn(`[ProviderChain] Provider ${provider.name} not available: ${err instanceof Error ? err.message : String(err)}`);
@@ -511,10 +553,16 @@ export class MultiProviderEmbedder {
   private activeProvider: EmbeddingProvider | null = null;
 
   constructor(config: ProviderConfig = {}) {
-    this.jina = new JinaEmbedder(config);
-    this.voyage = new VoyageEmbedder(config);
-    this.openai = new OpenAIEmbedder(config);
-    this.local = new LocalEmbedder(1024);
+    const resolvedConfig = { ...config };
+    if (resolvedConfig.provider === 'jina-v2') {
+      resolvedConfig.provider = 'jina';
+      resolvedConfig.model = resolvedConfig.model ?? 'jina-embeddings-v2-base-code';
+    }
+
+    this.jina = new JinaEmbedder(resolvedConfig);
+    this.voyage = new VoyageEmbedder(resolvedConfig);
+    this.openai = new OpenAIEmbedder(resolvedConfig);
+    this.local = new LocalEmbedder(this.jina.dimensions);
 
     this.chain = new ProviderChain();
     this.chain.addProvider(this.jina);
@@ -528,7 +576,7 @@ export class MultiProviderEmbedder {
         await (provider as any).initialize?.();
         await provider.healthCheck();
         this.activeProvider = provider;
-        console.log(`[MultiProviderEmbedder] Primary provider: ${provider.name} (${provider.dimensions} dimensions)`);
+        console.log(`[MultiProviderEmbedder] Primary provider: ${provider.name} model=${provider.modelName ?? 'default'} (${provider.dimensions} dimensions)`);
         return;
       } catch (err) {
         console.warn(`[MultiProviderEmbedder] Provider ${provider.name} not available: ${err instanceof Error ? err.message : String(err)}`);
@@ -539,7 +587,7 @@ export class MultiProviderEmbedder {
   }
 
   get dimensions(): number {
-    return this.activeProvider?.dimensions ?? 1024;
+    return this.activeProvider?.dimensions ?? this.jina.dimensions;
   }
 
   get providerName(): string {
@@ -551,6 +599,13 @@ export class MultiProviderEmbedder {
       throw new Error('[MultiProviderEmbedder] Not initialized. Call initialize() first.');
     }
     const texts = chunks.map(c => c.content.trim() === '' ? ' ' : c.content);
+    return this.activeProvider.embedBatch(texts);
+  }
+
+  async embedBatch(texts: string[]): Promise<number[][]> {
+    if (!this.activeProvider) {
+      throw new Error('[MultiProviderEmbedder] Not initialized. Call initialize() first.');
+    }
     return this.activeProvider.embedBatch(texts);
   }
 

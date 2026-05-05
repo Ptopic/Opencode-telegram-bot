@@ -1,6 +1,6 @@
 import type { CodeChunk, DependencyEdge, SearchResult, ProjectStats, SearchOptions } from '../types.js';
 import type { Node, Edge } from '../graph/types.js';
-import { EMBEDDING_DIMENSIONS } from '../types.js';
+import { DEFAULT_EMBEDDING_DIMENSIONS } from '../types.js';
 import { Schema, Field, FixedSizeList, Float32, Utf8, Int32, Bool } from 'apache-arrow';
 import lancedb from '@lancedb/lancedb';
 import { BM25 } from '../search/bm25.js';
@@ -52,6 +52,7 @@ export class Database {
   private dependencyGraphTable: string;
   private graphNodesTable: string;
   private graphEdgesTable: string;
+  private embeddingDimensions: number;
   private db: any = null;
   private chunksTable: any = null;
   private graphTable: any = null;
@@ -62,12 +63,13 @@ export class Database {
   private bm25Cache: Map<string, { bm25: BM25; chunkIds: string[]; chunkIndexToId: Map<number, string> }> = new Map();
   private currentBm25ProjectPath: string = '';
 
-  constructor(config: DBConfig) {
+  constructor(config: DBConfig, embeddingDimensions: number = DEFAULT_EMBEDDING_DIMENSIONS) {
     this.uri = config.uri;
     this.codeChunksTable = config.codeChunksTable ?? CODE_CHUNKS_TABLE;
     this.dependencyGraphTable = config.dependencyGraphTable ?? DEPENDENCY_GRAPH_TABLE;
     this.graphNodesTable = config.graphNodesTable ?? GRAPH_NODES_TABLE;
     this.graphEdgesTable = config.graphEdgesTable ?? GRAPH_EDGES_TABLE;
+    this.embeddingDimensions = embeddingDimensions;
   }
 
   async initDatabase(): Promise<void> {
@@ -91,7 +93,7 @@ export class Database {
       new Field('fqn', new Utf8(), true),
       new Field('parentId', new Utf8(), true),
       new Field('metadata', new Utf8()),
-      new Field('vector', new FixedSizeList(EMBEDDING_DIMENSIONS, new Field('', new Float32()))),
+      new Field('vector', new FixedSizeList(this.embeddingDimensions, new Field('', new Float32()))),
       new Field('summaryVectorJson', new Utf8(), true),
       new Field('fileHash', new Utf8()),
     ]);
@@ -136,6 +138,17 @@ export class Database {
         this.chunksTable = await this.db.createEmptyTable(this.codeChunksTable, chunksSchema);
       } else {
         this.chunksTable = await this.db.openTable(this.codeChunksTable);
+        // Check vector dimension mismatch
+        const existingSchema = this.chunksTable.schema;
+        const vectorField = existingSchema.fields.find((f: any) => f.name === 'vector');
+        if (vectorField) {
+          const existingDim = vectorField.type.listSize;
+          if (existingDim !== this.embeddingDimensions) {
+            console.warn(`[Database] Dimension mismatch: existing table has ${existingDim} dims, requested ${this.embeddingDimensions} dims. Dropping and recreating table.`);
+            await this.db.dropTable(this.codeChunksTable);
+            this.chunksTable = await this.db.createEmptyTable(this.codeChunksTable, chunksSchema);
+          }
+        }
       }
     } catch (err) {
       console.warn('[Database] code_chunks table corrupted, recreating:', err instanceof Error ? err.message : err);
@@ -205,7 +218,7 @@ export class Database {
       new Field('fqn', new Utf8(), true),
       new Field('parentId', new Utf8(), true),
       new Field('metadata', new Utf8()),
-      new Field('vector', new FixedSizeList(EMBEDDING_DIMENSIONS, new Field('', new Float32()))),
+      new Field('vector', new FixedSizeList(this.embeddingDimensions, new Field('', new Float32()))),
       new Field('summaryVectorJson', new Utf8(), true),
       new Field('fileHash', new Utf8()),
     ]);
@@ -223,7 +236,7 @@ export class Database {
       fqn: chunk.fqn ?? null,
       parentId: chunk.parentId ?? null,
       metadata: JSON.stringify(chunk.metadata),
-      vector: embeddings[i] ?? new Array(EMBEDDING_DIMENSIONS).fill(0),
+      vector: embeddings[i] ?? new Array(this.embeddingDimensions).fill(0),
       summaryVectorJson: summaryEmbeddings?.[i] ? JSON.stringify(summaryEmbeddings[i]) : null,
       fileHash: chunk.fileHash ?? null,
     }));

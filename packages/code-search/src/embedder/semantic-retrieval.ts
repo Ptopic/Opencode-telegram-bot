@@ -2,7 +2,6 @@ import { promises as fs } from 'fs';
 import { join, dirname } from 'path';
 import { createHash } from 'crypto';
 import type { CodeChunk } from '../types.js';
-import { EMBEDDING_DIMENSIONS } from '../types.js';
 import { MultiProviderEmbedder, type ProviderConfig } from './jina-embedder.js';
 
 export interface SemanticManifest {
@@ -70,8 +69,8 @@ export class SemanticIndex {
       const manifestContent = await fs.readFile(manifestPath, 'utf-8');
       this.manifest = JSON.parse(manifestContent) as SemanticManifest;
 
-      if (this.manifest.embeddingDimension !== EMBEDDING_DIMENSIONS) {
-        console.warn(`[SemanticIndex] Dimension mismatch: manifest has ${this.manifest.embeddingDimension}, current uses ${EMBEDDING_DIMENSIONS}. Need rebuild.`);
+      if (this.manifest.embeddingDimension !== this.embedder.dimensions) {
+        console.warn(`[SemanticIndex] Dimension mismatch: manifest has ${this.manifest.embeddingDimension}, current uses ${this.embedder.dimensions}. Need rebuild.`);
         return false;
       }
 
@@ -117,8 +116,8 @@ export class SemanticIndex {
     const batchSize = 64;
     for (let i = 0; i < texts.length; i += batchSize) {
       const batch = texts.slice(i, i + batchSize);
-      const batchVectors = await this.embedder.embedQueryWithFallback(batch.join(' '));
-      vectors.push(batchVectors);
+      const batchVectors = await this.embedder.embedBatch(batch);
+      vectors.push(...batchVectors);
       if (i + batchSize < texts.length) {
         await new Promise(r => setTimeout(r, 100));
       }
@@ -144,7 +143,7 @@ export class SemanticIndex {
       chunkCount: chunks.length,
       embeddingProvider: this.embedder.providerName,
       embeddingModel: 'jina-embeddings-v3',
-      embeddingDimension: EMBEDDING_DIMENSIONS,
+      embeddingDimension: this.embedder.dimensions,
       buildTimestamp: new Date().toISOString(),
       buildDurationMs: durationMs,
       checksum: createHash('sha256').update(chunksChecksum + vectorsChecksum).digest('hex'),

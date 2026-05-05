@@ -8,6 +8,7 @@ import { ChunkSummarizer } from './summarizer/summarizer.js';
 // ROUNDTRIP_TEST: console.log("WATCH_REINDEX_2026_05_01_1234");
 import { exactSearch } from './search/exact-search.js';
 import type { SearchOptions, IndexOptions, ProjectStats, SearchResult, CodeChunk } from './types.js';
+import { getDimensionsForModel, DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from './types.js';
 import type { Node, Context } from './graph/types.js';
 import { DefaultConfig, type Config } from './config/index.js';
 import { loadGlobalConfig, getSearchModeOptions } from './config/global-config.js';
@@ -23,11 +24,20 @@ export class CodeSearchEngine {
 
   constructor(config: Partial<Config> = {}) {
     this.config = { ...DefaultConfig, ...config };
+
+    // Determine actual model name from provider
+    const actualModel = this.config.embedder.provider === 'jina-v2'
+      ? 'jina-embeddings-v2-base-code'
+      : (this.config.embedder.model ?? DEFAULT_EMBEDDING_MODEL);
+
+    // Pre-compute embedding dimensions before Database construction
+    const embeddingDimensions = getDimensionsForModel(actualModel);
+
     this.db = new Database({
       uri: this.config.database.uri,
       codeChunksTable: this.config.database.codeChunksTable,
       dependencyGraphTable: this.config.database.dependencyGraphTable,
-    });
+    }, embeddingDimensions);
     this.chunker = new ChunkManager({
       maxChunkSize: this.config.chunking.maxChunkSize ?? 1000,
       overlap: this.config.chunking.overlap ?? 100,

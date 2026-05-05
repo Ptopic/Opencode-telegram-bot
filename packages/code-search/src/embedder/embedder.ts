@@ -1,5 +1,4 @@
 import type { CodeChunk } from '../types.js';
-import { EMBEDDING_DIMENSIONS } from '../types.js';
 import { MultiProviderEmbedder, createProviderChain, type ProviderConfig } from './jina-embedder.js';
 import { SemanticRetrieval, type SemanticIndex } from './semantic-retrieval.js';
 
@@ -9,7 +8,7 @@ export type { EmbeddingProvider, ProviderConfig } from './jina-embedder.js';
 export type { SemanticManifest, SemanticArtifact } from './semantic-retrieval.js';
 
 export interface EmbedderConfig {
-  provider: 'jina' | 'voyage' | 'openai' | 'local';
+  provider: 'jina' | 'jina-v2' | 'voyage' | 'openai' | 'local';
   model?: string;
   apiKey?: string;
   baseUrl?: string;
@@ -27,6 +26,7 @@ export class Embedder {
   constructor(config: EmbedderConfig) {
     this.config = config;
     this.multiProvider = new MultiProviderEmbedder({
+      provider: config.provider,
       model: config.model,
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
@@ -73,6 +73,6 @@ export class Embedder {
   }
 
   getDimensions(): number {
-    return EMBEDDING_DIMENSIONS;
+    return this.multiProvider.dimensions;
   }
 }

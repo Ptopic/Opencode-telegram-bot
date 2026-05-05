@@ -63,7 +63,7 @@ export interface Config {
     dependencyGraphTable?: string;
   };
   embedder: {
-    provider: 'jina' | 'voyage' | 'openai' | 'local';
+    provider: 'jina' | 'jina-v2' | 'voyage' | 'openai' | 'local';
     model?: string;
     apiKey?: string;
     baseUrl?: string;
