@@ -3,9 +3,7 @@ import { ChunkManager } from './chunker/chunk-manager.js';
 import { Embedder } from './embedder/embedder.js';
 import { FileWatcher } from './watcher/file-watcher.js';
 import { ChunkSummarizer } from './summarizer/summarizer.js';
-// WATCH_TEST_MARKER: Hermestest2026 console.log("WATCH_TEST_2026_05_01");
-// FRESH_MARKER_TEST: console.log("FRESH_WATCH_TEST_2026_05_01");
-// ROUNDTRIP_TEST: console.log("WATCH_REINDEX_2026_05_01_1234");
+
 import { exactSearch } from './search/exact-search.js';
 import type { SearchOptions, IndexOptions, ProjectStats, SearchResult, CodeChunk } from './types.js';
 import { getDimensionsForModel, DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from './types.js';
@@ -94,21 +92,83 @@ export class CodeSearchEngine {
       return this.getStats();
     }
 
-    console.log('[CodeSearchEngine] Total chunks to index:', chunks.length);
-    const embeddings = await this.embedder.embedChunks(chunks);
+    console.log('[CodeSearchEngine] Total chunks from changed files:', chunks.length);
+
+    // === INCREMENTAL INDEXING: skip re-embedding unchanged chunks ===
+    // Group chunks by filePath for per-file incremental diff
+    const chunksByFile = new Map<string, CodeChunk[]>();
+    for (const chunk of chunks) {
+      const existing = chunksByFile.get(chunk.filePath) ?? [];
+      existing.push(chunk);
+      chunksByFile.set(chunk.filePath, existing);
+    }
+
+    const chunksToEmbed: CodeChunk[] = [];
+    const staleChunkIds: string[] = [];
+    let unchangedCount = 0;
+
+    for (const [filePath, fileChunks] of chunksByFile) {
+      // Get existing chunk hashes for this file from DB
+      const existingHashes = await this.db.getChunksByPath(filePath, this.currentProjectPath);
+
+      if (existingHashes.size === 0) {
+        // New file — embed all chunks
+        chunksToEmbed.push(...fileChunks);
+        continue;
+      }
+
+      // Changed file — only embed chunks with new/changed hashes
+      const newChunkHashes = new Set<string>();
+      for (const chunk of fileChunks) {
+        if (chunk.chunkHash && existingHashes.has(chunk.chunkHash)) {
+          // Unchanged — skip embedding, keep existing record in DB
+          newChunkHashes.add(chunk.chunkHash);
+          unchangedCount++;
+        } else {
+          // New or changed chunk — needs embedding
+          chunksToEmbed.push(chunk);
+          if (chunk.chunkHash) {
+            newChunkHashes.add(chunk.chunkHash);
+          }
+        }
+      }
+
+      // Stale: hashes in existingHashes but not in new chunks
+      for (const [hash, id] of existingHashes) {
+        if (!newChunkHashes.has(hash)) {
+          staleChunkIds.push(id);
+        }
+      }
+    }
+
+    console.log('[CodeSearchEngine] Incremental: embed', chunksToEmbed.length, '| skip', unchangedCount, 'unchanged | remove', staleChunkIds.length, 'stale');
+
+    // Delete stale chunks (content no longer exists in the file)
+    if (staleChunkIds.length > 0) {
+      await this.db.removeChunksByIds(staleChunkIds);
+    }
+
+    if (chunksToEmbed.length === 0) {
+      console.log('[CodeSearchEngine] All chunks unchanged, no embedding needed');
+      return this.getStats();
+    }
+
+    // Embed only the changed/new chunks
+    console.log('[CodeSearchEngine] Embedding', chunksToEmbed.length, 'chunks...');
+    const embeddings = await this.embedder.embedChunks(chunksToEmbed);
 
     const globalConfig = loadGlobalConfig();
     const generateSummary = options?.generateSummary ?? globalConfig.generateSummary;
-    let chunksWithSummaries: CodeChunk[] = chunks;
+    let chunksWithSummaries: CodeChunk[] = chunksToEmbed;
     let summaryEmbeddings: number[][] | undefined;
 
     if (generateSummary) {
       console.log('[CodeSearchEngine] Generating chunk summaries...');
       const summaries = await this.summarizer.summarizeChunks(
-        chunks.map(c => ({ content: c.content, filePath: c.filePath }))
+        chunksToEmbed.map(c => ({ content: c.content, filePath: c.filePath }))
       );
 
-      chunksWithSummaries = chunks.map((chunk, i) => ({
+      chunksWithSummaries = chunksToEmbed.map((chunk, i) => ({
         ...chunk,
         summary: summaries[i] || undefined,
       }));
@@ -122,7 +182,7 @@ export class CodeSearchEngine {
       console.log('[CodeSearchEngine] Skipping summary generation (generateSummary=false)');
     }
 
-    console.log('[CodeSearchEngine] Storing chunks in database...');
+    console.log('[CodeSearchEngine] Storing', chunksWithSummaries.length, 'chunks in database...');
     await this.db.upsertChunks(chunksWithSummaries, embeddings, this.currentProjectPath, summaryEmbeddings);
     return this.getStats();
   }
@@ -299,10 +359,59 @@ export class CodeSearchEngine {
         const { readFile } = await import('fs/promises');
         const content = await readFile(filePath, 'utf-8');
         const hash = createHash('sha256').update(content).digest('hex');
+
+        // Check file hash — skip if unchanged (e.g., vim :w with no edits)
+        const indexedHashes = await this.db.getIndexedFileHashes(this.currentProjectPath);
+        if (indexedHashes.get(filePath) === hash) {
+          console.log(`[watch] Unchanged file (hash match), skipping: ${filePath}`);
+          return;
+        }
+
+        // Chunk the file (chunks now have chunkHash from computeChunkHash)
         const chunks = await this.chunker.chunkFile(filePath, hash);
-        const embeddings = await this.embedder.embedChunks(chunks);
-        await this.db.upsertChunks(chunks, embeddings, this.currentProjectPath);
-        console.log(`[watch] Re-indexed: ${filePath} (${chunks.length} chunks)`);
+
+        // Incremental: only embed chunks with new/changed hashes
+        const existingHashes = await this.db.getChunksByPath(filePath, this.currentProjectPath);
+        const chunksToEmbed: CodeChunk[] = [];
+        const staleChunkIds: string[] = [];
+        const newChunkHashes = new Set<string>();
+
+        if (existingHashes.size === 0) {
+          // New file — embed all chunks
+          chunksToEmbed.push(...chunks);
+        } else {
+          // Changed file — only embed new/changed chunks
+          for (const chunk of chunks) {
+            if (chunk.chunkHash && existingHashes.has(chunk.chunkHash)) {
+              newChunkHashes.add(chunk.chunkHash);
+            } else {
+              chunksToEmbed.push(chunk);
+              if (chunk.chunkHash) {
+                newChunkHashes.add(chunk.chunkHash);
+              }
+            }
+          }
+          // Collect stale chunk IDs
+          for (const [hash, id] of existingHashes) {
+            if (!newChunkHashes.has(hash)) {
+              staleChunkIds.push(id);
+            }
+          }
+        }
+
+        // Remove stale chunks (content no longer in file)
+        if (staleChunkIds.length > 0) {
+          await this.db.removeChunksByIds(staleChunkIds);
+        }
+
+        if (chunksToEmbed.length === 0) {
+          console.log(`[watch] Re-indexed: ${filePath} (0 changed chunks, ${staleChunkIds.length} stale removed)`);
+          return;
+        }
+
+        const embeddings = await this.embedder.embedChunks(chunksToEmbed);
+        await this.db.upsertChunks(chunksToEmbed, embeddings, this.currentProjectPath);
+        console.log(`[watch] Re-indexed: ${filePath} (${chunksToEmbed.length} embedded, ${staleChunkIds.length} stale removed)`);
       } catch (err) {
         console.error(`[watch] Failed to index ${filePath}:`, err instanceof Error ? err.message : err);
       }

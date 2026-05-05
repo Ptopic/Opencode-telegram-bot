@@ -115,6 +115,10 @@ export class ChunkManager {
     return { content, hash };
   }
 
+  private computeChunkHash(content: string): string {
+    return createHash('sha256').update(content).digest('hex');
+  }
+
   private async chunkWithChonkie(
     content: string,
     filePath: string,
@@ -133,6 +137,7 @@ export class ChunkManager {
 
       for (const chunk of chunks) {
         chunk.fileHash = fileHash;
+        chunk.chunkHash = this.computeChunkHash(chunk.content);
       }
 
       return chunks;
@@ -141,6 +146,7 @@ export class ChunkManager {
       const fallbackChunks = this.lineChunker.chunkFile(content, filePath);
       for (const chunk of fallbackChunks) {
         chunk.fileHash = fileHash;
+        chunk.chunkHash = this.computeChunkHash(chunk.content);
       }
       return fallbackChunks;
     }

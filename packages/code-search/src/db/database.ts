@@ -34,6 +34,7 @@ interface CodeChunkRecord {
   vector: number[];
   summaryVectorJson?: string;
   fileHash?: string;
+  chunkHash?: string;
 }
 
 interface DependencyEdgeRecord {
@@ -96,6 +97,7 @@ export class Database {
       new Field('vector', new FixedSizeList(this.embeddingDimensions, new Field('', new Float32()))),
       new Field('summaryVectorJson', new Utf8(), true),
       new Field('fileHash', new Utf8()),
+      new Field('chunkHash', new Utf8(), true),
     ]);
 
     const graphSchema = new Schema([
@@ -221,6 +223,7 @@ export class Database {
       new Field('vector', new FixedSizeList(this.embeddingDimensions, new Field('', new Float32()))),
       new Field('summaryVectorJson', new Utf8(), true),
       new Field('fileHash', new Utf8()),
+      new Field('chunkHash', new Utf8(), true),
     ]);
 
     const records = chunks.map((chunk, i) => ({
@@ -239,6 +242,7 @@ export class Database {
       vector: embeddings[i] ?? new Array(this.embeddingDimensions).fill(0),
       summaryVectorJson: summaryEmbeddings?.[i] ? JSON.stringify(summaryEmbeddings[i]) : null,
       fileHash: chunk.fileHash ?? null,
+      chunkHash: chunk.chunkHash ?? null,
     }));
 
     try {
@@ -329,6 +333,28 @@ export class Database {
     for (const row of results) {
       if (row.fileHash && row.filePath) {
         hashes.set(row.filePath, row.fileHash);
+      }
+    }
+
+    return hashes;
+  }
+
+  async getChunksByPath(path: string, projectPath: string): Promise<Map<string, string>> {
+    if (!this.chunksTable) throw new Error('Database not initialized');
+
+    const hashes = new Map<string, string>();
+
+    let query = this.chunksTable.query();
+    if (projectPath) {
+      query = query.where(`projectPath = "${projectPath}"`);
+    }
+    query = query.where(`filePath = "${path}"`);
+
+    const results = await query.select(['id', 'chunkHash']).toArray();
+
+    for (const row of results) {
+      if (row.chunkHash && row.id) {
+        hashes.set(row.chunkHash, row.id);
       }
     }
 
@@ -962,6 +988,16 @@ export class Database {
   async removeByPath(path: string): Promise<void> {
     if (!this.chunksTable) throw new Error('Database not initialized');
     await this.chunksTable.delete(`filePath = "${path}"`);
+  }
+
+  async removeChunksByIds(ids: string[]): Promise<void> {
+    if (!this.chunksTable) throw new Error('Database not initialized');
+    if (ids.length === 0) return;
+
+    const idsList = ids.map(id => `"${id}"`).join(', ');
+    await this.chunksTable.delete(`id IN (${idsList})`);
+
+    this.invalidateBm25Cache();
   }
 
   async getStats(projectPath?: string): Promise<ProjectStats> {

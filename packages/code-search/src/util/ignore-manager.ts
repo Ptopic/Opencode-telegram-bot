@@ -22,11 +22,15 @@ export class IgnoreManager {
   static async fromDirectory(rootDir: string): Promise<IgnoreManager> {
     const manager = new IgnoreManager(rootDir);
 
+    // Parse patterns from both .gitignore and .indexignore before adding
+    // This prevents the second add() call from overriding negation patterns
+    const patterns: string[] = [];
+
     const gitignorePath = join(rootDir, '.gitignore');
     if (existsSync(gitignorePath)) {
       try {
         const content = readFileSync(gitignorePath, 'utf-8');
-        manager.addGitignoreRules(content);
+        patterns.push(...IgnoreManager.parseIgnoreContent(content));
       } catch {}
     }
 
@@ -34,11 +38,22 @@ export class IgnoreManager {
     if (existsSync(indexignorePath)) {
       try {
         const content = readFileSync(indexignorePath, 'utf-8');
-        manager.addGitignoreRules(content);
+        patterns.push(...IgnoreManager.parseIgnoreContent(content));
       } catch {}
     }
 
+    if (patterns.length > 0) {
+      manager.addPatterns(patterns);
+    }
+
     return manager;
+  }
+
+  private static parseIgnoreContent(content: string): string[] {
+    return content
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line && !line.startsWith('#'));
   }
 
   private getDefaultPatterns(): string[] {
@@ -111,10 +126,7 @@ export class IgnoreManager {
   }
 
   addGitignoreRules(content: string, dirPath?: string): void {
-    const patterns = content
-      .split('\n')
-      .map(line => line.trim())
-      .filter(line => line && !line.startsWith('#'));
+    const patterns = IgnoreManager.parseIgnoreContent(content);
     this.addPatterns(patterns, dirPath);
   }
 

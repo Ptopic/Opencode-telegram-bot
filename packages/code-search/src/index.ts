@@ -3,6 +3,7 @@ export { Database } from './db/database.js';
 export { ChunkManager } from './chunker/chunk-manager.js';
 export { Embedder } from './embedder/embedder.js';
 export { FileWatcher } from './watcher/file-watcher.js';
+export { IgnoreManager } from './util/ignore-manager.js';
 export { TreeSitterExtractor } from './graph/tree-sitter-extractor.js';
 export { GraphQueryManager } from './graph/query-manager.js';
 export { LexicalSearcher } from './search/lexical-searcher.js';
