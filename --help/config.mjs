@@ -14,11 +14,12 @@
 // `model set smarter/normal` writes here; `prompt <path>` applies to agents/categories.
 //
 export const models = {
-  smart: "synthetic/hf:moonshotai/Kimi-K2.6",
+  smart: "wafer.ai/GLM-5.1",
   normal: "minimax-coding-plan/MiniMax-M2.7-highspeed",
 };
 
 export const favoriteModels = [
+  { id: "wafer.ai/GLM-5.1",                          label: "Wafer GLM 5.1",         tier: "smart" },
   { id: "synthetic/hf:zai-org/GLM-5.1",             label: "GLM 5.1",                tier: "smart" },
   { id: "synthetic/hf:moonshotai/Kimi-K2.6",        label: "Kimi K2.6",              tier: "smart" },
   { id: "openai/gpt-5.5",                            label: "GPT-5.5",                tier: "smart" },

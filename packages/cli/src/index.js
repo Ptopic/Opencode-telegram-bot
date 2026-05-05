@@ -19,7 +19,6 @@ import { logsCommand } from "./commands/logs.js";
 import { watchCommand } from "./commands/watch.js";
 import { startServer } from "./server.js";
 import { projectStartCommand, projectStopCommand, projectListCommand } from "./commands/project.js";
-import { codeIndexCommand } from "./commands/code-index.js";
 import { codeSearchCommand } from "./commands/code-search.js";
 import { codeStatusCommand } from "./commands/code-status.js";
 import { codeConfigCommand } from "./commands/code-config.js";
@@ -779,6 +778,7 @@ if (command === "code-index" || command === "index") {
     const watch = args.includes("--watch");
     const remaining = args.filter((a) => a !== "--watch");
     const projectPath = remaining[0];
+    const { codeIndexCommand } = await import("./commands/code-index.js");
     await codeIndexCommand(projectPath, { watch });
     if (!watch) process.exit(0);
 }
@@ -810,8 +810,9 @@ if (command === "mcp") {
 }
 
 if (command === "prompt") {
-    const targetPath = args[0];
-    await promptCommand(targetPath);
+    const modelsOnly = args.includes("modelsOnly");
+    const targetPath = args.filter((a) => a !== "modelsOnly")[0] || process.cwd();
+    await promptCommand(targetPath, { modelsOnly });
     process.exit(0);
 }
 

@@ -62,6 +62,9 @@ COMMANDS
     prompt [path]                        Set up .opencode config for a project (defaults to cwd)
                                          Merges --help/config.mjs (disabledTools, allowedTools,
                                          permissions, agentPrompts) into oh-my-openagent.jsonc
+    prompt modelsOnly [path]             Apply ONLY model assignments (smart/normal) to agents
+                                         and categories. Skips prompt definitions, skills, MCPs,
+                                         deniedTools, bashRules, and agentTools.
 
   Utility
     config get                           Show server config
