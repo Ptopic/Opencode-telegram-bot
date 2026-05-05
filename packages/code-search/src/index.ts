@@ -5,7 +5,10 @@ export { Embedder } from './embedder/embedder.js';
 export { FileWatcher } from './watcher/file-watcher.js';
 export { TreeSitterExtractor } from './graph/tree-sitter-extractor.js';
 export { GraphQueryManager } from './graph/query-manager.js';
+export { LexicalSearcher } from './search/lexical-searcher.js';
+export type { LexicalResult, LexicalSearchOptions } from './search/lexical-searcher.js';
 export type { SearchResult, CodeChunk, ProjectStats } from './types.js';
+export type { RegexResult, RegexSearchOptions } from './search/regex-search.js';
 export type {
   Node,
   Edge,
