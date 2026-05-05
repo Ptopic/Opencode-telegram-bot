@@ -1,0 +1,8 @@
+QA Scenario: Config-driven chunk size is passed to Chonkie
+Tool: Bash (node -e)
+Preconditions: pnpm build completed
+Steps:
+  1. Run: node -e "const { ChonkieExtractor } = require('./dist/chunker/chonkie-chunker.js'); const e = new ChonkieExtractor(512); console.log('created with 512');"
+  2. Assert no error thrown
+Expected Result: ChonkieExtractor accepts chunkSize param without error
+Result: PASS - ChonkieExtractor created with chunkSize=512

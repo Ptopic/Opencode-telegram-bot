@@ -26,32 +26,28 @@ const LANGUAGE_MAP: Record<string, string> = {
   '.tsx': 'typescript',
   '.js': 'javascript',
   '.jsx': 'javascript',
-  '.py': 'python',
-  '.go': 'go',
-  '.rs': 'rust',
-  '.java': 'java',
-  '.c': 'c',
-  '.cpp': 'cpp',
 };
 
 export class TreeSitterExtractor {
   private chunkers: Map<string, CodeChunker> = new Map();
-  private initialized: boolean = false;
+  private chunkSize: number;
 
-  async initialize(): Promise<void> {
-    if (this.initialized) return;
+  constructor(chunkSize: number = 512) {
+    this.chunkSize = chunkSize;
+  }
 
-    const languages = ['javascript', 'typescript', 'python', 'go', 'rust', 'java', 'c', 'cpp'];
+  private async initialize(): Promise<void> {
+    if (this.chunkers.size > 0) return;
+
+    const languages = ['javascript', 'typescript'];
 
     for (const lang of languages) {
       const chunker = await CodeChunker.create({
         language: lang,
-        chunkSize: 2048,
+        chunkSize: this.chunkSize,
       });
       this.chunkers.set(lang, chunker);
     }
-
-    this.initialized = true;
   }
 
   async extractSymbols(filePath: string, content: string, language: string): Promise<{ nodes: Node[]; edges: Edge[] }> {

@@ -2,6 +2,7 @@ import type { CodeChunk } from '../types.js';
 import type { Database } from '../db/database.js';
 import { TreeSitterExtractor } from '../graph/tree-sitter-extractor.js';
 import { ChonkieExtractor } from './chonkie-chunker.js';
+import { LineChunker } from './line-chunker.js';
 import { IgnoreManager } from '../util/ignore-manager.js';
 import { createHash } from 'crypto';
 
@@ -16,12 +17,17 @@ export class ChunkManager {
   private db?: Database;
   private treeSitterExtractor: TreeSitterExtractor;
   private chonkieExtractor: ChonkieExtractor;
+  private lineChunker: LineChunker;
 
   constructor(config: ChunkManagerConfig, db?: Database) {
     this.config = config;
     this.db = db;
     this.treeSitterExtractor = new TreeSitterExtractor();
-    this.chonkieExtractor = new ChonkieExtractor();
+    this.chonkieExtractor = new ChonkieExtractor(
+      config.maxChunkSize ?? 512,
+      config.overlap ?? Math.floor((config.maxChunkSize ?? 512) * 0.2)
+    );
+    this.lineChunker = new LineChunker(config.maxChunkSize ?? 512);
   }
 
   async chunkFile(filePath: string, fileHash: string): Promise<CodeChunk[]> {
@@ -47,7 +53,7 @@ export class ChunkManager {
     const { readdirSync, statSync } = await import('fs');
     const { join, extname } = await import('path');
     const allChunks: CodeChunk[] = [];
-    const extensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.rs', '.java', '.c', '.cpp', '.h', '.hpp', '.json']);
+    const extensions = new Set(['.ts', '.tsx', '.js', '.jsx']);
     const indexedHashes = options?.indexedFileHashes ?? new Map();
 
     const ignoreManager = await IgnoreManager.fromDirectory(this.currentProjectPath);
@@ -122,13 +128,22 @@ export class ChunkManager {
       await this.db.upsertEdges(edges, this.currentProjectPath);
     }
 
-    const chunks = await this.chonkieExtractor.chunkFile(content, filePath);
+    try {
+      const chunks = await this.chonkieExtractor.chunkFile(content, filePath);
 
-    for (const chunk of chunks) {
-      chunk.fileHash = fileHash;
+      for (const chunk of chunks) {
+        chunk.fileHash = fileHash;
+      }
+
+      return chunks;
+    } catch (err) {
+      console.warn('[ChunkManager] Chonkie failed, falling back to line chunker:', (err as Error).message);
+      const fallbackChunks = this.lineChunker.chunkFile(content, filePath);
+      for (const chunk of fallbackChunks) {
+        chunk.fileHash = fileHash;
+      }
+      return fallbackChunks;
     }
-
-    return chunks;
   }
 
   private currentProjectPath: string = '';
@@ -139,15 +154,6 @@ export class ChunkManager {
       '.tsx': 'typescript',
       '.js': 'javascript',
       '.jsx': 'javascript',
-      '.py': 'python',
-      '.go': 'go',
-      '.rs': 'rust',
-      '.java': 'java',
-      '.c': 'c',
-      '.cpp': 'cpp',
-      '.h': 'c',
-      '.hpp': 'cpp',
-      '.json': 'json',
     };
     return map[ext] ?? 'text';
   }

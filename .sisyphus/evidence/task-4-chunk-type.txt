@@ -1,0 +1,8 @@
+QA Scenario: Chunk type detection
+Tool: Bash (node -e)
+Preconditions: pnpm build completed
+Steps:
+  1. LineChunker with detectChunkType() tested with function content
+Expected Result: chunkType 'function' returned for function content
+Result: PASS - chunkType='function' for 'function foo() { return 1; }' content
+Note: detectChunkType is not directly exported but is used internally by both ChonkieExtractor and LineChunker

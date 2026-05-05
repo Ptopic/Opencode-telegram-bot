@@ -13,6 +13,10 @@ export interface CodeChunk {
   parentId?: string;
   metadata: Record<string, unknown>;
   fileHash?: string;
+  /** Byte offset start in source file (from Chonkie Chunk) */
+  startIndex?: number;
+  /** Byte offset end in source file (from Chonkie Chunk) */
+  endIndex?: number;
 }
 
 export interface DependencyEdge {

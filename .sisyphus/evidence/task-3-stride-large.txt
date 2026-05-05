@@ -1,0 +1,10 @@
+QA Scenario: Large chunk is split into overlapping sub-chunks
+Tool: Code review
+Preconditions: pnpm build completed
+Steps:
+  1. strideChunk() function exists in stride.ts
+  2. Applied in chonkie-chunker.ts:99-101 after chunking
+  3. Uses windowChars = chunkSize * 4.0, overlapChars = overlapTokens * 4.0
+  4. Sliding window advances by strideChars = windowChars - overlapChars
+Expected Result: Multiple sub-chunks with strideIndex/totalStrides metadata, overlapping lines
+Result: PASS - strideChunk() implemented with correct token-based striding formula

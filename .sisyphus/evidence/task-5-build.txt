@@ -1,0 +1,7 @@
+QA Scenario: Full build succeeds
+Tool: Bash
+Preconditions: All prior tasks completed
+Steps:
+  1. cd packages/code-search && pnpm typecheck && pnpm build
+  2. Assert exit code 0
+Result: PASS - tsc --noEmit and tsc build both succeed

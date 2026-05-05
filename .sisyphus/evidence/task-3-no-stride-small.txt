@@ -1,0 +1,9 @@
+QA Scenario: Small chunk is returned unchanged (no striding)
+Tool: Bash (node -e)
+Preconditions: pnpm build completed
+Steps:
+  1. Create a LineChunker with chunkSize=512
+  2. Chunk a small JS function (e.g., "function foo() { return 1; }")
+  3. Verify it returns 1 chunk with no stride metadata
+Expected Result: Single chunk, no striding applied
+Result: PASS - 1 chunk returned, no strideIndex metadata (as expected for small content)

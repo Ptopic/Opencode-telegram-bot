@@ -1,0 +1,48 @@
+# QA Results - code-search package
+
+## Build: SUCCESS
+
+## Scenario Results
+
+### Scenario 1: MODEL_DIMENSIONS returns correct values
+Command: node -e "const { MODEL_DIMENSIONS, getDimensionsForModel } = require('./packages/code-search/dist/types.js'); console.log('v2:', MODEL_DIMENSIONS['jina-embeddings-v2-base-code']); console.log('v3:', MODEL_DIMENSIONS['jina-embeddings-v3']);"
+Expected: v2=768, v3=1024
+Actual: v2=768, v3=1024
+Status: PASS
+
+### Scenario 2: Unknown model throws
+Command: node -e "const { getDimensionsForModel } = require('./packages/code-search/dist/types.js'); try { getDimensionsForModel('nonexistent'); console.log('NO_ERROR'); } catch(e) { console.log('ERROR:', e.message.includes('Unknown embedding model') ? 'CORRECT' : 'WRONG'); }"
+Expected: Throws "Unknown embedding model" error
+Actual: ERROR: CORRECT (threw proper error)
+Status: PASS
+
+### Scenario 3: JinaEmbedder dynamic dims
+Command: node -e "const { JinaEmbedder } = require('./packages/code-search/dist/embedder/jina-embedder.js'); const e1 = new JinaEmbedder({ model: 'jina-embeddings-v2-base-code' }); console.log('v2:', e1.dimensions); const e2 = new JinaEmbedder({ model: 'jina-embeddings-v3' }); console.log('v3:', e2.dimensions);"
+Expected: v2=768, v3=1024
+Actual: v2=768, v3=1024
+Status: PASS
+
+### Scenario 4: Embedder.getDimensions() dynamic
+Command: node -e "const { Embedder } = require('./packages/code-search/dist/embedder/embedder.js'); const e1 = new Embedder({ provider: 'jina', model: 'jina-embeddings-v2-base-code' }); console.log('v2:', e1.getDimensions()); const e2 = new Embedder({ provider: 'jina' }); console.log('v3 default:', e2.getDimensions());"
+Expected: v2=768, v3 default=1024
+Actual: v2=1024, v3 default=1024
+Status: FAIL (v2 returned 1024 instead of 768)
+
+### Scenario 5: jina-v2 provider alias
+Command: node -e "const { Embedder } = require('./packages/code-search/dist/embedder/embedder.js'); const e = new Embedder({ provider: 'jina-v2' }); console.log('jina-v2 dims:', e.getDimensions());"
+Expected: dims=768
+Actual: dims=1024
+Status: FAIL (jina-v2 returned 1024 instead of 768)
+
+### Scenario 6: Database accepts embeddingDimensions param
+Command: node -e "const { Database } = require('./packages/code-search/dist/db/database.js'); console.log('Database class has constructor with 2 params:', Database.constructor.toString().includes('embeddingDimensions'));"
+Expected: true
+Actual: false
+Status: FAIL
+
+## VERDICT: REJECT
+
+Failures:
+- Scenario 4: Embedder returns wrong dimensions for jina-embeddings-v2-base-code model (1024 vs expected 768)
+- Scenario 5: jina-v2 provider alias returns wrong dimensions (1024 vs expected 768)
+- Scenario 6: Database constructor signature check failed
