@@ -20,6 +20,14 @@ export interface SearchResult {
   score: number;
   query: string;
   highlights: string[];
+  /** Containing function/class context (when fullSection=true) */
+  sectionContext?: {
+    startLine: number;
+    endLine: number;
+    content: string;
+    type: 'function' | 'class' | 'method' | 'module';
+    name: string;
+  };
 }
 
 export interface ProjectStats {
@@ -32,12 +40,18 @@ export interface ProjectStats {
   indexSizeBytes: number;
 }
 
+export type SearchModeV2 = 'regex' | 'lexical' | 'semantic' | 'hybrid';
+
 export interface SearchOptions {
   limit?: number;
   threshold?: number;
   projectPath?: string;
   exactSearch?: boolean;
+  mode?: SearchModeV2;
   filters?: SearchFilters;
+  fullSection?: boolean;
+  rerank?: boolean;
+  rerankModel?: string;
 }
 
 export interface SearchFilters {
@@ -91,9 +105,13 @@ export interface SearchInput {
   limit?: number;
   threshold?: number;
   exactSearch?: boolean;
+  mode?: SearchModeV2;
   language?: string;
   filePath?: string;
   chunkTypes?: ChunkType[];
+  fullSection?: boolean;
+  rerank?: boolean;
+  rerankModel?: string;
 }
 
 export interface IndexInput {

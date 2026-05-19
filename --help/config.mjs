@@ -21,7 +21,8 @@ export const models = {
 export const favoriteModels = [
   { id: "wafer.ai/GLM-5.1",                          label: "Wafer GLM 5.1",         tier: "smart" },
   { id: "synthetic/hf:zai-org/GLM-5.1",             label: "GLM 5.1",                tier: "smart" },
-  { id: "synthetic/hf:moonshotai/Kimi-K2.6",        label: "Kimi K2.6",              tier: "smart" },
+  { id: "synthetic/hf:moonshotai/Kimi-K2.6",        label: "Kimi K2.6 (HF)",          tier: "smart" },
+  { id: "kimi-for-coding/k2p6",                     label: "Kimi K2.6 (Code)",        tier: "smart" },
   { id: "openai/gpt-5.5",                            label: "GPT-5.5",                tier: "smart" },
   { id: "openai/gpt-5.4",                            label: "GPT-5.4",                tier: "smart" },
   { id: "synthetic/hf:zai-org/GLM-5",               label: "GLM 5",                  tier: "smart" },

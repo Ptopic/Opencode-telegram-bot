@@ -9,7 +9,7 @@ export { GraphQueryManager } from './graph/query-manager.js';
 export { LexicalSearcher } from './search/lexical-searcher.js';
 export { HybridSearcher } from './search/hybrid-searcher.js';
 export type { LexicalResult, LexicalSearchOptions } from './search/lexical-searcher.js';
-export type { SearchResult, CodeChunk, ProjectStats } from './types.js';
+export type { SearchResult, CodeChunk, ProjectStats, SearchModeV2 } from './types.js';
 export type { RegexResult, RegexSearchOptions } from './search/regex-search.js';
 export type {
   HybridSearchMode,

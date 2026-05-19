@@ -40,6 +40,14 @@ export interface SearchResult {
   score: number;
   query: string;
   highlights: string[];
+  /** Containing function/class context (when fullSection=true) */
+  sectionContext?: {
+    startLine: number;
+    endLine: number;
+    content: string;
+    type: 'function' | 'class' | 'method' | 'module';
+    name: string;
+  };
 }
 
 export interface ProjectStats {
@@ -51,6 +59,8 @@ export interface ProjectStats {
   languages: Record<string, number>;
   indexSizeBytes: number;
 }
+
+export type SearchModeV2 = 'regex' | 'lexical' | 'semantic' | 'hybrid';
 
 export interface SearchOptions {
   limit?: number;
@@ -69,6 +79,14 @@ export interface SearchOptions {
   exactWeight?: number;
   /** If true, skip vector/hybrid search and use pure exact text search only. Default: false */
   exactSearch?: boolean;
+  /** Search mode. Default: 'hybrid'. When set, overrides exactSearch. */
+  mode?: SearchModeV2;
+  /** Rerank results with cross-encoder (requires JINA_API_KEY) */
+  rerank?: boolean;
+  /** Reranker model to use */
+  rerankModel?: string;
+  /** Return containing function/class context */
+  fullSection?: boolean;
 }
 
 export interface SearchFilters {

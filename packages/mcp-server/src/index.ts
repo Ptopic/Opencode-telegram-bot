@@ -57,6 +57,25 @@ const CODE_SEARCH_TOOLS = [
           type: 'boolean',
           description: 'Use pure exact substring matching instead of semantic search. Set true when searching for literal strings (e.g., console.log("test"), specific variable names, exact error messages).',
         },
+        mode: {
+          type: 'string',
+          enum: ['regex', 'lexical', 'semantic', 'hybrid'],
+          description: 'Search mode. regex=exact substring, lexical=BM25 only, semantic=vector only, hybrid=combined (default). When set, overrides exactSearch.',
+        },
+        fullSection: {
+          type: 'boolean',
+          description: 'Return containing function/class context',
+          default: false,
+        },
+        rerank: {
+          type: 'boolean',
+          description: 'Rerank results with cross-encoder (requires JINA_API_KEY)',
+          default: false,
+        },
+        rerankModel: {
+          type: 'string',
+          description: 'Reranker model to use (default: jina-reranker-v2-base-multilingual)',
+        },
       },
       required: ['query'],
     },
@@ -316,12 +335,16 @@ class CodeSearchMCPServer {
   }
 
   private async handleSearch(input: SearchInput) {
-    const { query, projectPath, limit, threshold, exactSearch, language, filePath, chunkTypes } = input;
+    const { query, projectPath, limit, threshold, exactSearch, mode, language, filePath, chunkTypes, fullSection, rerank, rerankModel } = input;
 
     const results = await this.client.search(query, projectPath, {
       limit: limit ?? 10,
       threshold,
       exactSearch,
+      mode,
+      fullSection,
+      rerank,
+      rerankModel,
       filters: {
         language,
         filePath,
@@ -337,6 +360,7 @@ class CodeSearchMCPServer {
       score: r.score.toFixed(3),
       content: r.chunk.content,
       highlights: r.highlights,
+      ...(r.sectionContext ? { sectionContext: r.sectionContext } : {}),
     }));
 
     return {

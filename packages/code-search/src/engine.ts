@@ -5,7 +5,9 @@ import { FileWatcher } from './watcher/file-watcher.js';
 import { ChunkSummarizer } from './summarizer/summarizer.js';
 
 import { exactSearch } from './search/exact-search.js';
-import type { SearchOptions, IndexOptions, ProjectStats, SearchResult, CodeChunk } from './types.js';
+import { Reranker } from './search/reranker.js';
+import { SectionExtractor } from './search/section-extractor.js';
+import type { SearchOptions, SearchModeV2, IndexOptions, ProjectStats, SearchResult, CodeChunk } from './types.js';
 import { getDimensionsForModel, DEFAULT_EMBEDDING_MODEL, DEFAULT_EMBEDDING_DIMENSIONS } from './types.js';
 import type { Node, Context } from './graph/types.js';
 import { DefaultConfig, type Config } from './config/index.js';
@@ -16,6 +18,8 @@ export class CodeSearchEngine {
   private chunker: ChunkManager;
   private embedder: Embedder;
   private summarizer: ChunkSummarizer;
+  private reranker: Reranker | null = null;
+  private sectionExtractor: SectionExtractor | null = null;
   private watcher: FileWatcher | null = null;
   private config: Config;
   private currentProjectPath: string = '';
@@ -55,6 +59,17 @@ export class CodeSearchEngine {
       provider: 'openai',
       apiKey: this.config.embedder.apiKey,
     });
+
+    // Initialize reranker if API key is available
+    const jinaApiKey = process.env.JINA_API_KEY;
+    if (jinaApiKey) {
+      this.reranker = new Reranker({
+        apiKey: jinaApiKey,
+      });
+    }
+
+    // Initialize section extractor (lazy, loads grammars on first use)
+    this.sectionExtractor = new SectionExtractor();
   }
 
   async initialize(): Promise<void> {
@@ -188,147 +203,35 @@ export class CodeSearchEngine {
   }
 
   async search(query: string, options?: Partial<SearchOptions>): Promise<SearchResult[]> {
-    const globalConfig = loadGlobalConfig();
-    const globalModeOptions = getSearchModeOptions(globalConfig.searchMode);
+    const mode: SearchModeV2 = options?.mode ?? (options?.exactSearch ? 'regex' : 'hybrid');
+    const limit = options?.limit ?? 10;
 
-    const useGraph = options?.useGraph ?? globalModeOptions.useGraph;
-    const useHybrid = options?.useHybrid ?? globalModeOptions.useHybrid;
-    const useSummaryEmbedding = options?.useSummaryEmbedding ?? globalModeOptions.useSummaryEmbedding;
-    const exactWeight = options?.exactWeight ?? 0.4; // default: exact search contributes 40% boost
-
-    const projectPath = this.currentProjectPath;
-
-    // Pure exact search mode — skip all vector/hybrid search
-    if (options?.exactSearch) {
-      const allChunksForExact = await this.db.getAllChunksForExactSearch(projectPath, options?.filters);
-      const exactResults = exactSearch(query, allChunksForExact, {
-        threshold: 0.25,
-        limit: options?.limit ?? 10,
-        fuzzy: false,
-        literal: true,
-      });
-
-      const results: SearchResult[] = exactResults
-        .filter(r => r.score >= 0.3)
-        .map(r => {
-          const chunk = allChunksForExact.find(c => c.id === r.chunkId)!;
-          return {
-            chunk: {
-              id: chunk.id,
-              filePath: chunk.filePath,
-              content: chunk.content,
-              startLine: chunk.startLine,
-              endLine: chunk.endLine,
-              language: chunk.language ?? 'unknown',
-              chunkType: 'block',
-              metadata: {},
-            },
-            score: r.score,
-            query,
-            highlights: [r.matchedText],
-          };
-        });
-
-      results.sort((a, b) => b.score - a.score);
-      return results.slice(0, options?.limit ?? 10);
+    let results: SearchResult[];
+    switch (mode) {
+      case 'regex':
+        results = await this.regexSearch(query, options);
+        break;
+      case 'lexical':
+        results = await this.lexicalSearch(query, options);
+        break;
+      case 'semantic':
+        results = await this.semanticSearch(query, options);
+        break;
+      case 'hybrid':
+      default:
+        results = await this.hybridSearch(query, options);
+        break;
     }
 
-    // Step 1: Run exact substring/pattern search (always, it's cheap)
-    // This handles: console.log("Test"), JSX fragments, quoted strings, exact substrings
-    const allChunksForExact = await this.db.getAllChunksForExactSearch(projectPath, options?.filters);
-    const exactResults = exactWeight > 0
-      ? exactSearch(query, allChunksForExact, {
-          threshold: 0.25,
-          limit: options?.limit ?? 10,
-          fuzzy: true,
-        })
-      : [];
-
-    const exactChunkIds = new Map<string, { score: number; matchType: string }>();
-    for (const r of exactResults) {
-      exactChunkIds.set(r.chunkId, { score: r.score, matchType: r.matchType });
+    if (options?.rerank && this.reranker && results.length > 0) {
+      results = await this.reranker.rerankSearchResults(query, results, limit);
     }
 
-    // Step 2: Run the appropriate hybrid/vector search
-    let hybridResults: SearchResult[];
-
-    const searchOptions = {
-      ...options,
-      projectPath,
-      graphBoost: options?.graphBoost ?? globalConfig.graphWeight,
-      bm25Weight: options?.bm25Weight ?? globalConfig.bm25Weight,
-      vectorWeight: options?.vectorWeight ?? globalConfig.vectorWeight,
-      useGraph,
-      useHybrid,
-      useSummaryEmbedding,
-      summaryWeight: options?.summaryWeight ?? globalConfig.summaryWeight,
-    };
-
-    if (!globalConfig.generateSummary) {
-      const queryEmbedding = await this.embedder.embedQuery(query);
-      hybridResults = await this.db.searchHybrid(query, queryEmbedding, searchOptions);
-    } else if (useSummaryEmbedding && useHybrid) {
-      const queryEmbedding = await this.embedder.embedQuery(query);
-      hybridResults = await this.db.searchHybridWithSummary(query, queryEmbedding, queryEmbedding, searchOptions);
-    } else if (useHybrid) {
-      const queryEmbedding = await this.embedder.embedQuery(query);
-      hybridResults = await this.db.searchHybrid(query, queryEmbedding, searchOptions);
-    } else if (useGraph) {
-      const queryEmbedding = await this.embedder.embedQuery(query);
-      hybridResults = await this.db.searchWithGraphBoost(queryEmbedding, searchOptions);
-    } else {
-      const queryEmbedding = await this.embedder.embedQuery(query);
-      hybridResults = await this.db.search(queryEmbedding, searchOptions);
+    if (options?.fullSection && this.sectionExtractor && results.length > 0) {
+      results = await this.enrichWithSections(results);
     }
 
-    // Step 3: Boost hybrid results with exact match scores
-    if (exactChunkIds.size > 0 && exactWeight > 0) {
-      const boosted: SearchResult[] = [];
-
-      for (const result of hybridResults) {
-        const exact = exactChunkIds.get(result.chunk.id);
-        if (exact) {
-          // Exact match boosts the score significantly
-          const boostedScore = result.score + (exact.score * exactWeight);
-          boosted.push({ ...result, score: Math.min(1, boostedScore) });
-        } else {
-          boosted.push(result);
-        }
-      }
-
-      // Step 4: If we have strong exact matches not in hybrid results, prepend them
-      const hybridChunkIds = new Set(hybridResults.map(r => r.chunk.id));
-      const missingExactMatches = exactResults.filter(
-        r => !hybridChunkIds.has(r.chunkId) && r.score >= 0.5
-      );
-
-      for (const em of missingExactMatches) {
-        // Find the full chunk data
-        const chunk = allChunksForExact.find(c => c.id === em.chunkId);
-        if (chunk) {
-          boosted.push({
-            chunk: {
-              id: chunk.id,
-              filePath: chunk.filePath,
-              content: chunk.content,
-              startLine: chunk.startLine,
-              endLine: chunk.endLine,
-              language: chunk.language ?? 'unknown',
-              chunkType: 'block',
-              metadata: {},
-            },
-            score: em.score * exactWeight,
-            query,
-            highlights: [em.matchedText],
-          });
-        }
-      }
-
-      boosted.sort((a, b) => b.score - a.score);
-      return boosted.slice(0, options?.limit ?? 10);
-    }
-
-    return hybridResults.slice(0, options?.limit ?? 10);
+    return results.slice(0, limit);
   }
 
   async searchWithGraph(query: string, options?: Partial<SearchOptions & { graphBoost?: number }>): Promise<SearchResult[]> {
@@ -533,6 +436,181 @@ export class CodeSearchEngine {
     }
 
     return deadCode;
+  }
+
+  private async hybridSearch(query: string, options?: Partial<SearchOptions>): Promise<SearchResult[]> {
+    const globalConfig = loadGlobalConfig();
+    const globalModeOptions = getSearchModeOptions(globalConfig.searchMode);
+
+    const useGraph = options?.useGraph ?? globalModeOptions.useGraph;
+    const useHybrid = options?.useHybrid ?? globalModeOptions.useHybrid;
+    const useSummaryEmbedding = options?.useSummaryEmbedding ?? globalModeOptions.useSummaryEmbedding;
+    const exactWeight = options?.exactWeight ?? 0.4;
+
+    const projectPath = this.currentProjectPath;
+
+    const allChunksForExact = await this.db.getAllChunksForExactSearch(projectPath, options?.filters);
+    const exactResults = exactWeight > 0
+      ? exactSearch(query, allChunksForExact, {
+          threshold: 0.25,
+          limit: options?.limit ?? 10,
+          fuzzy: true,
+        })
+      : [];
+
+    const exactChunkIds = new Map<string, { score: number; matchType: string }>();
+    for (const r of exactResults) {
+      exactChunkIds.set(r.chunkId, { score: r.score, matchType: r.matchType });
+    }
+
+    let hybridResults: SearchResult[];
+
+    const searchOptions = {
+      ...options,
+      projectPath,
+      graphBoost: options?.graphBoost ?? globalConfig.graphWeight,
+      bm25Weight: options?.bm25Weight ?? globalConfig.bm25Weight,
+      vectorWeight: options?.vectorWeight ?? globalConfig.vectorWeight,
+      useGraph,
+      useHybrid,
+      useSummaryEmbedding,
+      summaryWeight: options?.summaryWeight ?? globalConfig.summaryWeight,
+    };
+
+    if (!globalConfig.generateSummary) {
+      const queryEmbedding = await this.embedder.embedQuery(query);
+      hybridResults = await this.db.searchHybrid(query, queryEmbedding, searchOptions);
+    } else if (useSummaryEmbedding && useHybrid) {
+      const queryEmbedding = await this.embedder.embedQuery(query);
+      hybridResults = await this.db.searchHybridWithSummary(query, queryEmbedding, queryEmbedding, searchOptions);
+    } else if (useHybrid) {
+      const queryEmbedding = await this.embedder.embedQuery(query);
+      hybridResults = await this.db.searchHybrid(query, queryEmbedding, searchOptions);
+    } else if (useGraph) {
+      const queryEmbedding = await this.embedder.embedQuery(query);
+      hybridResults = await this.db.searchWithGraphBoost(queryEmbedding, searchOptions);
+    } else {
+      const queryEmbedding = await this.embedder.embedQuery(query);
+      hybridResults = await this.db.search(queryEmbedding, searchOptions);
+    }
+
+    if (exactChunkIds.size > 0 && exactWeight > 0) {
+      const boosted: SearchResult[] = [];
+
+      for (const result of hybridResults) {
+        const exact = exactChunkIds.get(result.chunk.id);
+        if (exact) {
+          const boostedScore = result.score + (exact.score * exactWeight);
+          boosted.push({ ...result, score: Math.min(1, boostedScore) });
+        } else {
+          boosted.push(result);
+        }
+      }
+
+      const hybridChunkIds = new Set(hybridResults.map(r => r.chunk.id));
+      const missingExactMatches = exactResults.filter(
+        r => !hybridChunkIds.has(r.chunkId) && r.score >= 0.5
+      );
+
+      for (const em of missingExactMatches) {
+        const chunk = allChunksForExact.find(c => c.id === em.chunkId);
+        if (chunk) {
+          boosted.push({
+            chunk: {
+              id: chunk.id,
+              filePath: chunk.filePath,
+              content: chunk.content,
+              startLine: chunk.startLine,
+              endLine: chunk.endLine,
+              language: chunk.language ?? 'unknown',
+              chunkType: 'block',
+              metadata: {},
+            },
+            score: em.score * exactWeight,
+            query,
+            highlights: [em.matchedText],
+          });
+        }
+      }
+
+      boosted.sort((a, b) => b.score - a.score);
+      return boosted.slice(0, options?.limit ?? 10);
+    }
+
+    return hybridResults.slice(0, options?.limit ?? 10);
+  }
+
+  private async enrichWithSections(results: SearchResult[]): Promise<SearchResult[]> {
+    return Promise.all(
+      results.map(async (result) => {
+        try {
+          const section = await this.sectionExtractor!.extractContainingSection(
+            result.chunk.filePath,
+            result.chunk.startLine,
+          );
+          return { ...result, sectionContext: section ?? undefined };
+        } catch {
+          return result;
+        }
+      })
+    );
+  }
+
+  private async regexSearch(query: string, options?: Partial<SearchOptions>): Promise<SearchResult[]> {
+    const projectPath = this.currentProjectPath;
+    const allChunksForExact = await this.db.getAllChunksForExactSearch(projectPath, options?.filters);
+    const exactResults = exactSearch(query, allChunksForExact, {
+      threshold: 0.25,
+      limit: options?.limit ?? 10,
+      fuzzy: false,
+      literal: true,
+    });
+
+    const results: SearchResult[] = exactResults
+      .filter(r => r.score >= 0.3)
+      .map(r => {
+        const chunk = allChunksForExact.find(c => c.id === r.chunkId)!;
+        return {
+          chunk: {
+            id: chunk.id,
+            filePath: chunk.filePath,
+            content: chunk.content,
+            startLine: chunk.startLine,
+            endLine: chunk.endLine,
+            language: chunk.language ?? 'unknown',
+            chunkType: 'block',
+            metadata: {},
+          },
+          score: r.score,
+          query,
+          highlights: [r.matchedText],
+        };
+      });
+
+    results.sort((a, b) => b.score - a.score);
+    return results.slice(0, options?.limit ?? 10);
+  }
+
+  private async lexicalSearch(query: string, options?: Partial<SearchOptions>): Promise<SearchResult[]> {
+    return this.search(query, {
+      ...options,
+      mode: 'hybrid',
+      bm25Weight: 1,
+      vectorWeight: 0,
+      useGraph: false,
+      useSummaryEmbedding: false,
+    });
+  }
+
+  private async semanticSearch(query: string, options?: Partial<SearchOptions>): Promise<SearchResult[]> {
+    return this.search(query, {
+      ...options,
+      mode: 'hybrid',
+      bm25Weight: 0,
+      vectorWeight: 1,
+      useGraph: false,
+      useSummaryEmbedding: false,
+    });
   }
 
   private async getAncestors(nodeId: string): Promise<Node[]> {

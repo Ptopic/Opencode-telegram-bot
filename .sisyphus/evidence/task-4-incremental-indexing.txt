@@ -1,0 +1,18 @@
+108:    const chunksToEmbed: CodeChunk[] = [];
+109:    const staleChunkIds: string[] = [];
+110:    let unchangedCount = 0;
+114:      const existingHashes = await this.db.getChunksByPath(filePath, this.currentProjectPath);
+118:        chunksToEmbed.push(...fileChunks);
+128:          unchangedCount++;
+131:          chunksToEmbed.push(chunk);
+141:          staleChunkIds.push(id);
+146:    console.log('[CodeSearchEngine] Incremental: embed', chunksToEmbed.length, '| skip', unchangedCount, 'unchanged | remove', staleChunkIds.length, 'stale');
+149:    if (staleChunkIds.length > 0) {
+150:      await this.db.removeChunksByIds(staleChunkIds);
+153:    if (chunksToEmbed.length === 0) {
+159:    console.log('[CodeSearchEngine] Embedding', chunksToEmbed.length, 'chunks...');
+160:    const embeddings = await this.embedder.embedChunks(chunksToEmbed);
+164:    let chunksWithSummaries: CodeChunk[] = chunksToEmbed;
+170:        chunksToEmbed.map(c => ({ content: c.content, filePath: c.filePath }))
+173:      chunksWithSummaries = chunksToEmbed.map((chunk, i) => ({
+993:  async removeChunksByIds(ids: string[]): Promise<void> {

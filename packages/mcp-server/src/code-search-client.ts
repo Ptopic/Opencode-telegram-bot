@@ -50,8 +50,16 @@ export class CodeSearchClient {
     projectPath: string | undefined,
     options?: SearchOptions
   ): Promise<SearchResult[]> {
-    if (options?.exactSearch) {
+    if (options?.mode === 'regex' || options?.exactSearch) {
       return this.exactSearch(query, projectPath, options);
+    }
+
+    if (options?.mode === 'lexical') {
+      return this.modeSearch(query, projectPath, 'lexical', options);
+    }
+
+    if (options?.mode === 'semantic') {
+      return this.modeSearch(query, projectPath, 'semantic', options);
     }
 
     const response = await this.client.post<
@@ -76,6 +84,24 @@ export class CodeSearchClient {
     >('/api/search/search/exact', { query, projectPath, options });
     if (!response.data.success) {
       throw new Error(response.data.error || 'Exact search operation failed');
+    }
+    return response.data.results || [];
+  }
+
+  /**
+   * Mode-specific search (lexical, semantic)
+   */
+  private async modeSearch(
+    query: string,
+    projectPath: string | undefined,
+    mode: 'lexical' | 'semantic',
+    options?: SearchOptions
+  ): Promise<SearchResult[]> {
+    const response = await this.client.post<
+      { success: boolean; results: SearchResult[]; error?: string }
+    >(`/api/search/search/${mode}`, { query, projectPath, options });
+    if (!response.data.success) {
+      throw new Error(response.data.error || `${mode} search operation failed`);
     }
     return response.data.results || [];
   }

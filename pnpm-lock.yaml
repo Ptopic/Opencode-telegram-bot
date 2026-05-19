@@ -79,6 +79,12 @@ importers:
       express:
         specifier: ^4.18.2
         version: 4.22.1
+      ignore:
+        specifier: ^7.0.5
+        version: 7.0.5
+      okapibm25:
+        specifier: ^1.4.1
+        version: 1.4.1
       openai:
         specifier: ^6.34.0
         version: 6.34.0(ws@8.20.0)(zod@3.25.76)
@@ -3225,6 +3231,9 @@ packages:
   object.assign@4.1.7:
     resolution: {integrity: sha512-nK28WOo+QIjBkDduTINE4JkF/UJJKyf2EJxvJKfblDpyg0Q+pkOHNTL0Qwy6NP6FhE/EnzV73BxxqcJaXY9anw==}
     engines: {node: '>= 0.4'}
+
+  okapibm25@1.4.1:
+    resolution: {integrity: sha512-UHmeH4MAtZXGFVncwbY7pfFvDVNxpsyM3W66aGPU0SHj1+ld59ty+9lJ0ifcrcnPUl1XdYoDgb06ObyCnpTs3g==}
 
   on-finished@2.4.1:
     resolution: {integrity: sha512-oVlzkg3ENAhCk2zdv7IJwd/QUD4z2RxRwpkcGY8psCVcCYZNq4wYnVWALHM+brtuJjePWiYF/ClmuDr8Ch5+kg==}
@@ -7305,6 +7314,8 @@ snapshots:
       es-object-atoms: 1.1.1
       has-symbols: 1.1.0
       object-keys: 1.1.1
+
+  okapibm25@1.4.1: {}
 
   on-finished@2.4.1:
     dependencies:

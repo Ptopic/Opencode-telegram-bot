@@ -1,0 +1,3 @@
+4:import { IgnoreManager } from "@opencode-telegram/code-search";
+22:      if (manager.isIgnored(fullPath)) continue;
+103:  const manager = await IgnoreManager.fromDirectory(normalizedPath);

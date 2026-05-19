@@ -23,6 +23,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { BM25, type BM25Config } from './bm25.js';
+import { tokenizeCode } from './tokenizer.js';
 
 export interface LexicalResult {
   docId: string;
@@ -389,13 +390,7 @@ export class LexicalSearcher {
   }
 
   private tokenize(text: string): string[] {
-    return text
-      .toLowerCase()
-      .replace(/([^\w_.:#\/\@\$])/g, ' $1 ')
-      .replace(/(\w)'(\w)/g, '$1 $2')
-      .split(/\s+/)
-      .filter(t => t.length > 1)
-      .filter(t => !STOP_WORDS.has(t));
+    return tokenizeCode(text);
   }
 
   private async computeFileChecksum(filePath: string): Promise<string> {
@@ -456,21 +451,3 @@ export class LexicalSearcher {
     }
   }
 }
-
-const STOP_WORDS = new Set([
-  'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with',
-  'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been', 'be', 'have',
-  'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should',
-  'may', 'might', 'must', 'shall', 'can', 'need', 'dare', 'ought', 'used',
-  'it', 'its', 'this', 'that', 'these', 'those', 'i', 'you', 'he', 'she',
-  'we', 'they', 'what', 'which', 'who', 'whom', 'whose', 'where', 'when',
-  'why', 'how', 'all', 'each', 'every', 'both', 'few', 'more', 'most',
-  'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so',
-  'than', 'too', 'very', 'just', 'if', 'then', 'else', 'while', 'although',
-  'because', 'since', 'until', 'unless', 'though', 'before', 'after', 'about',
-  'into', 'through', 'during', 'above', 'below', 'between', 'under', 'again',
-  'further', 'once', 'function', 'class', 'const', 'let', 'var', 'export',
-  'import', 'default', 'async', 'await', 'return', 'static', 'public', 'private',
-  'protected', 'interface', 'type', 'extends', 'implements', 'new', 'try',
-  'catch', 'throw', 'finally', 'null', 'undefined', 'true', 'false',
-]);

@@ -1,4 +1,36 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "permission": "allow"
+  "permission": {},
+  "mcp": {
+    "code-search": {
+      "type": "local",
+      "command": [
+        "node",
+        "/Users/petartopic/Desktop/Petar/Opencode-telegram-bot/packages/mcp-server/dist/index.js"
+      ],
+      "environment": {
+        "CODE_SEARCH_API_URL": "http://localhost:4098"
+      },
+      "enabled": true
+    }
+  },
+  "provider": {
+    "synthetic": {
+      "models": {
+        "hf:zai-org/GLM-5.1": {
+          "name": "GLM-5.1"
+        },
+        "hf:moonshotai/Kimi-K2.6": {
+          "name": "Kimi-K2.6"
+        }
+      }
+    },
+    "kimi-for-coding": {
+      "models": {
+        "k2p6": {
+          "name": "Kimi K2.6"
+        }
+      }
+    }
+  }
 }

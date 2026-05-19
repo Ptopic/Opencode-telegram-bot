@@ -36,6 +36,51 @@ export function createSearchRouter(engine: CodeSearchEngine): Router {
     }
   });
 
+  router.post('/search/regex', async (req: Request, res: Response) => {
+    try {
+      const { query, projectPath, options } = req.body;
+      if (!query || typeof query !== 'string') {
+        res.status(400).json({ error: 'query must be a string' });
+        return;
+      }
+      const results = await engine.search(query, { ...options, projectPath, mode: 'regex' });
+      res.json({ success: true, results });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.post('/search/lexical', async (req: Request, res: Response) => {
+    try {
+      const { query, projectPath, options } = req.body;
+      if (!query || typeof query !== 'string') {
+        res.status(400).json({ error: 'query must be a string' });
+        return;
+      }
+      const results = await engine.search(query, { ...options, projectPath, mode: 'lexical' });
+      res.json({ success: true, results });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.post('/search/semantic', async (req: Request, res: Response) => {
+    try {
+      const { query, projectPath, options } = req.body;
+      if (!query || typeof query !== 'string') {
+        res.status(400).json({ error: 'query must be a string' });
+        return;
+      }
+      const results = await engine.search(query, { ...options, projectPath, mode: 'semantic' });
+      res.json({ success: true, results });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      res.status(500).json({ error: message });
+    }
+  });
+
   router.post('/search/vector-only', async (req: Request, res: Response) => {
     try {
       const { query, projectPath, options } = req.body;

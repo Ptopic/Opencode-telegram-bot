@@ -1,0 +1,31 @@
+70:    const indexedHashes = await this.db.getIndexedFileHashes(this.currentProjectPath);
+108:    const chunksToEmbed: CodeChunk[] = [];
+109:    const staleChunkIds: string[] = [];
+114:      const existingHashes = await this.db.getChunksByPath(filePath, this.currentProjectPath);
+118:        chunksToEmbed.push(...fileChunks);
+131:          chunksToEmbed.push(chunk);
+141:          staleChunkIds.push(id);
+146:    console.log('[CodeSearchEngine] Incremental: embed', chunksToEmbed.length, '| skip', unchangedCount, 'unchanged | remove', staleChunkIds.length, 'stale');
+149:    if (staleChunkIds.length > 0) {
+150:      await this.db.removeChunksByIds(staleChunkIds);
+153:    if (chunksToEmbed.length === 0) {
+159:    console.log('[CodeSearchEngine] Embedding', chunksToEmbed.length, 'chunks...');
+160:    const embeddings = await this.embedder.embedChunks(chunksToEmbed);
+164:    let chunksWithSummaries: CodeChunk[] = chunksToEmbed;
+170:        chunksToEmbed.map(c => ({ content: c.content, filePath: c.filePath }))
+173:      chunksWithSummaries = chunksToEmbed.map((chunk, i) => ({
+366:        const indexedHashes = await this.db.getIndexedFileHashes(this.currentProjectPath);
+368:          console.log(`[watch] Unchanged file (hash match), skipping: ${filePath}`);
+376:        const existingHashes = await this.db.getChunksByPath(filePath, this.currentProjectPath);
+377:        const chunksToEmbed: CodeChunk[] = [];
+378:        const staleChunkIds: string[] = [];
+383:          chunksToEmbed.push(...chunks);
+390:              chunksToEmbed.push(chunk);
+399:              staleChunkIds.push(id);
+405:        if (staleChunkIds.length > 0) {
+406:          await this.db.removeChunksByIds(staleChunkIds);
+409:        if (chunksToEmbed.length === 0) {
+410:          console.log(`[watch] Re-indexed: ${filePath} (0 changed chunks, ${staleChunkIds.length} stale removed)`);
+414:        const embeddings = await this.embedder.embedChunks(chunksToEmbed);
+415:        await this.db.upsertChunks(chunksToEmbed, embeddings, this.currentProjectPath);
+416:        console.log(`[watch] Re-indexed: ${filePath} (${chunksToEmbed.length} embedded, ${staleChunkIds.length} stale removed)`);
